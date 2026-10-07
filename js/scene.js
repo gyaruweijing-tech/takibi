@@ -41,8 +41,8 @@ export async function buildScene(renderer) {
   camera.position.set(0, 0.95, 1.55);
 
   // 夜空の光（ほんのわずか）。月のない夜なので、ほぼ焚き火の光だけになる
-  scene.add(new THREE.HemisphereLight(0x1a2236, 0x0a0806, 0.04));
-  const moon = new THREE.DirectionalLight(0x8aa0d0, 0.03);
+  scene.add(new THREE.HemisphereLight(0x2a3a58, 0x0c0a08, 0.3));
+  const moon = new THREE.DirectionalLight(0x8aa0d0, 0.08);
   moon.position.set(-3, 6, -2);
   scene.add(moon);
 

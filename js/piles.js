@@ -46,6 +46,24 @@ export function buildPiles(scene) {
   paper.position.copy(onStool(-0.09, -0.04)).add(new THREE.Vector3(0, 0.04, 0));
   const twigs = pile('twig', [[0, 0, 0, 0, 0.2, 0], [0, 0.03, 0.01, 0, -0.1, 0]]);
   twigs.position.copy(onStool(0.06, 0.05)).add(new THREE.Vector3(0, 0.02, 0));
+  // ランタン（火が無いときの手元の明かり。暖色のLEDの小さな光）
+  const lantern = new THREE.Group();
+  const metal = new THREE.MeshStandardMaterial({ color: 0x2b2b2b, metalness: 0.7, roughness: 0.5 });
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.05, 0.03, 20), metal); base.position.y = 0.015;
+  const glass = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.09, 20), new THREE.MeshStandardMaterial({ color: 0xfff1d6, emissive: 0xffc88a, emissiveIntensity: 2.2, roughness: 0.3 }));
+  glass.position.y = 0.075;
+  const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.045, 0.025, 20), metal); cap.position.y = 0.132;
+  lantern.add(base, glass, cap);
+  const lamp = new THREE.PointLight(0xffc48a, 0.45, 0, 2); lamp.position.y = 0.08;
+  lantern.add(lamp);
+  lantern.traverse((o) => { if (o.isMesh) o.castShadow = o !== glass; });
+  lantern.position.copy(onStool(-0.12, 0.07));
+  scene.add(lantern);
+  // ポールに吊るしたもう1つのランタン（画面の外・左上）。場面全体をやわらかく照らす
+  const hang = new THREE.PointLight(0xffd2a0, 2.6, 0, 2);
+  hang.position.set(-0.55, 1.25, 0.55);
+  hang.castShadow = true; hang.shadow.mapSize.set(512, 512); hang.shadow.radius = 8; hang.shadow.bias = -0.001;
+  scene.add(hang);
   // マッチ箱（無地）
   const box = new THREE.Group(); box.userData.pile = 'match';
   const mbox = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.016, 0.036), [
