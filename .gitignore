@@ -1,0 +1,10 @@
+.env*
+.claude/
+node_modules/
+dist/
+# 元の動画は入れない（顔・声・場所が映り得る）。切り出した炎だけを assets/ に入れる
+footage/
+*.mp4
+*.mov
+*.MOV
+*.m4v
