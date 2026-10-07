@@ -16,7 +16,8 @@ import { createInput, startMic } from './input.js';
 import { buildPiles } from './piles.js';
 import { createUI } from './ui.js';
 
-const DEBUG = new URLSearchParams(location.search).has('debug');
+const DEBUG = new URLSearchParams(location.search).has('debug') || new URLSearchParams(location.search).has('bench');
+const bench = {};
 const $ = (id) => document.getElementById(id);
 const toast = (msg, ms = 2600) => { if (!msg) return; const t = $('toast'); t.textContent = msg; t.style.opacity = 1; clearTimeout(toast.h); toast.h = setTimeout(() => (t.style.opacity = 0), ms); };
 
@@ -157,7 +158,7 @@ let blow = 0, fps = 60, frames = 0, fpsT = 0;
 function frame(now) {
   requestAnimationFrame(frame);
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
-  frames++; fpsT += dt; if (fpsT > 0.5) { fps = frames / fpsT; frames = 0; fpsT = 0; }
+  frames++; fpsT += dt; if (fpsT > 0.5) { fps = frames / fpsT; frames = 0; fpsT = 0; autoScale(); }
   shared.uTime.value = now / 1000;
   input.update(dt);
   if (started) {
@@ -197,8 +198,17 @@ function frame(now) {
   audio?.update(fire.hrr / 1000, fire.steam, emberLight.intensity / 20, blow > 0.3, dt);
   haptics.update(fire.hrr / 1000, now);
   post.update(now / 1000, flames.haze, flames.light * 12, dt);
-  post.render();
-  if (DEBUG) debugPanel();
+  renderer.shadowMap.needsUpdate = (frames & 1) === 0 || !started;
+  bench.beforeRender?.(); post.render(); bench.afterRender?.();
+  if (DEBUG && !bench.running) debugPanel();
+}
+// 重い PC では解像度を少し下げ、余裕があれば戻す（35fps 未満で下げ、55fps 超で上げる）
+let slow = 0;
+function autoScale() {
+  if (bench.running || !started) return;
+  if (fps < 35) slow++; else if (fps > 55) slow--; else slow = 0;
+  if (slow >= 2) { post.setScale(post.scale - 0.1); slow = 0; }
+  if (slow <= -4) { post.setScale(post.scale + 0.1); slow = 0; }
 }
 const p0below = (l) => l.pose.p[1] < -1;
 function hotBed() { let m = 0; for (const T of fire.bed.T) m = Math.max(m, T); return Math.min(1, Math.max(0, (m - 350) / 400)); }
@@ -251,7 +261,7 @@ function debugPanel() {
   d.textContent = [`fps ${fps.toFixed(0)}  燃焼 ×${speed}（f）`, `経過 ${(fire.time / 60).toFixed(1)}分`, `熱 ${(fire.hrr / 1000).toFixed(1)}kW  床 ${bedMax.toFixed(0)}℃`,
     `薪 ${fire.logs.length}  炎の柱 ${fire.columns.length}`, `火の粉 ${sparks.count()}  煙 ${smoke.count()}`,
     `パチ ${fire.stats.tick}  ピシッ ${fire.stats.crack}  バチッ ${fire.stats.pop}`, `折れ ${fire.stats.break}  燃え尽き ${fire.stats.burnout}`,
-    `光 ${fireLight.intensity.toFixed(0)}/${emberLight.intensity.toFixed(1)}  露出 ${renderer.toneMappingExposure.toFixed(2)}`, `吹く ${blow.toFixed(2)}  振動 ${haptics.connected ? 'あり' : 'なし'}`].join('\n');
+    `光 ${fireLight.intensity.toFixed(0)}/${emberLight.intensity.toFixed(1)}  露出 ${renderer.toneMappingExposure.toFixed(2)}  解像度 ${post.scale.toFixed(1)}`, `吹く ${blow.toFixed(2)}  振動 ${haptics.connected ? 'あり' : 'なし'}`].join('\n');
 }
 addEventListener('keydown', (e) => {
   if (e.code === 'KeyF' && DEBUG) speed = speed === 1 ? 10 : 1;
@@ -284,3 +294,27 @@ if (new URLSearchParams(location.search).has('autostart')) begin(new URLSearchPa
 requestAnimationFrame(frame);
 // 検証用：画面が隠れていても進める（?tick）
 if (new URLSearchParams(location.search).has('tick')) { const h = setInterval(() => { if (document.hidden) frame(performance.now()); }, 33); setTimeout(() => clearInterval(h), (+new URLSearchParams(location.search).get('tick') || 600) * 1000); }
+// 重さの測定（?bench）：燃えている焚き火で、部品を1つずつ外して測る
+if (new URLSearchParams(location.search).has('bench')) {
+  const { runBench } = await import('./bench.js');
+  if (!started) begin('lit');
+  const named = (n) => { const a = []; scene.traverse((o) => { if (o.name === n) a.push(o); }); return a; };
+  const hide = (name, ...ns) => ({ name, on: () => ns.forEach((n) => named(n).forEach((o) => (o.visible = false))), off: () => ns.forEach((n) => named(n).forEach((o) => (o.visible = true))) });
+  const flag = (name, get, set, v) => { let old; return { name, on: () => { old = get(); set(v); }, off: () => set(old) }; };
+  const hang = named('hang')[0];
+  const msaa = (n) => () => { for (const rt of [post.composer.renderTarget1, post.composer.renderTarget2]) { rt.samples = n; rt.dispose(); } };
+  const cases = [
+    { name: '全部入り' },
+    flag('炎の影なし', () => fireLight.castShadow, (v) => (fireLight.castShadow = v), false),
+    flag('ランタンの影なし', () => hang.castShadow, (v) => (hang.castShadow = v), false),
+    hide('草なし', 'grass'), hide('岩なし', 'rock'), hide('奥の木なし', 'tree'), hide('薪の山と台なし', 'pile', 'stool'),
+    flag('ブルームなし', () => post.bloom.enabled, (v) => (post.bloom.enabled = v), false),
+    flag('陽炎なし', () => post.haze.enabled, (v) => (post.haze.enabled = v), false),
+    flag('仕上げなし', () => post.fin.enabled, (v) => (post.fin.enabled = v), false),
+    flag('炎の絵なし', () => flames.mesh.visible, (v) => (flames.mesh.visible = v), false),
+    flag('FXAAなし', () => post.fxaa.enabled, (v) => (post.fxaa.enabled = v), false),
+    { name: '解像度0.8倍', on: () => post.setScale(0.8), off: () => post.setScale(1) },
+    { name: '全部入り(確認)' },
+  ];
+  await runBench(Object.assign(bench, { renderer, frame, scene, post, cases }));
+}

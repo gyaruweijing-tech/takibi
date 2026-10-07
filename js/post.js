@@ -5,6 +5,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { FXAAShader } from 'three/addons/shaders/FXAAShader.js';
 
 const Haze = {
   uniforms: { tDiffuse: { value: null }, uC: { value: new THREE.Vector2() }, uS: { value: new THREE.Vector2() }, uK: { value: 0 }, uTime: { value: 0 }, uAspect: { value: 1 } },
@@ -44,19 +45,28 @@ const Final = {
 };
 
 export function createPost(renderer, scene, camera) {
-  const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(innerWidth, innerHeight, { type: THREE.HalfFloatType, samples: 4 }));
+  const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(innerWidth, innerHeight, { type: THREE.HalfFloatType, samples: 0 }));   // MSAA は Iris Xe で約9ms。代わりに軽い FXAA
   composer.addPass(new RenderPass(scene, camera));
   const haze = new ShaderPass(Haze); composer.addPass(haze);
   const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.5, 0.6, 1.0);
   composer.addPass(bloom);
   composer.addPass(new OutputPass());
+  const fxaa = new ShaderPass(FXAAShader); composer.addPass(fxaa);
   const fin = new ShaderPass(Final); composer.addPass(fin);
-  const resize = () => { composer.setSize(innerWidth, innerHeight); composer.setPixelRatio(Math.min(2, devicePixelRatio)); };
+  // 解像度は重さに合わせて自動で上下する（scale：0.6〜1）
+  let scale = 1;
+  const resize = () => {
+    const pr = Math.min(2, devicePixelRatio) * scale;
+    renderer.setPixelRatio(pr); composer.setPixelRatio(pr); composer.setSize(innerWidth, innerHeight);
+    fxaa.material.uniforms.resolution.value.set(1 / (innerWidth * pr), 1 / (innerHeight * pr));
+  };
   addEventListener('resize', resize); resize();
   const v = new THREE.Vector3(), v2 = new THREE.Vector3();
   let exposure = 1;
   return {
-    composer, bloom,
+    composer, bloom, haze, fin, fxaa,
+    get scale() { return scale; },
+    setScale(s) { s = Math.min(1, Math.max(0.6, s)); if (Math.abs(s - scale) < 0.04) return; scale = s; resize(); },
     // h: 炎の上端までの高さ。light: 炎の明るさ（露出をスマホのように追従させる）
     update(t, hz, light, dt) {
       haze.uniforms.uTime.value = t; fin.uniforms.uTime.value = t;

@@ -14,7 +14,7 @@ export function buildPiles(scene) {
     return v.mesh;
   };
   const pile = (key, list) => {
-    const g = new THREE.Group(); g.userData.pile = key;
+    const g = new THREE.Group(); g.userData.pile = key; g.name = 'pile';
     for (const a of list) g.add(piece(key, ...a));
     scene.add(g);
     return g;
@@ -38,6 +38,7 @@ export function buildPiles(scene) {
     const side = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.26, 0.22), new THREE.MeshStandardMaterial({ color: 0xdcdcd8, roughness: 0.6 }));
     side.position.set(sx * 0.15, 0.13, 0); stool.add(side);
   }
+  stool.name = 'stool';
   stool.position.set(-0.62, 0, 0.2); stool.rotation.y = 0.3;
   stool.traverse((o) => { if (o.isMesh) { o.castShadow = o.receiveShadow = true; } });
   scene.add(stool);
@@ -60,9 +61,8 @@ export function buildPiles(scene) {
   lantern.position.copy(onStool(-0.12, 0.07));
   scene.add(lantern);
   // ポールに吊るしたもう1つのランタン（画面の外・左上）。場面全体をやわらかく照らす
-  const hang = new THREE.PointLight(0xffd2a0, 2.6, 0, 2);
+  const hang = new THREE.PointLight(0xffd2a0, 2.6, 0, 2); hang.name = 'hang';
   hang.position.set(-0.55, 1.25, 0.55);
-  hang.castShadow = true; hang.shadow.mapSize.set(512, 512); hang.shadow.radius = 8; hang.shadow.bias = -0.001;
   scene.add(hang);
   // マッチ箱（無地）
   const box = new THREE.Group(); box.userData.pile = 'match';
