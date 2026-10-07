@@ -14,6 +14,7 @@ import { createAudio } from './audio.js';
 import { createHaptics } from './haptics.js';
 import { createInput, startMic } from './input.js';
 import { buildPiles } from './piles.js';
+import { createUI } from './ui.js';
 
 const DEBUG = new URLSearchParams(location.search).has('debug');
 const $ = (id) => document.getElementById(id);
@@ -27,7 +28,7 @@ document.body.prepend(canvas);
 const renderer = createRenderer(canvas);
 renderer.setSize(innerWidth, innerHeight);
 addEventListener('resize', () => renderer.setSize(innerWidth, innerHeight));
-const { scene, camera, fireLight, emberLight } = await buildScene(renderer);
+const { scene, camera, fireLight, emberLight, stand } = await buildScene(renderer);
 const physics = await createPhysics();
 const flames = await createFlames(scene);
 const sparks = createSparks(scene);
@@ -56,24 +57,33 @@ function removeLog(log) {
   views.get(log.id)?.dispose(); views.delete(log.id);
 }
 
-let matchRef = null;
+const ui = createUI({
+  onSelect: (k) => input.setTool(k),
+  onMode: (m) => { resetWorld(); begin(m); },
+  onSound: () => { if (!audio) return false; audio.muted = !audio.muted; audio.setMuted(audio.muted); return audio.muted; },
+});
 const input = createInput({
   canvas, camera, scene, physics, getLogByMesh: byMesh,
-  onSpawn(key, p) {
-    if (fire.logs.length >= 40) { toast('台がいっぱい'); return null; }
+  fireTargets: () => [bedView.mesh, stand, ...[...views.values()].map((v) => v.mesh)],
+  onPlace(key, p, q) {
+    if (fire.logs.length >= 40) { toast('台がいっぱい'); return; }
     const log = makeLog(key);
-    log.pose = { p: [p.x, p.y, p.z], q: new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.random() * 6.28, (Math.random() - 0.5) * 0.3)).toArray() };
-    return addLog(log);
+    log.pose = { p: [p.x, p.y, p.z], q: q.toArray() };
+    addLog(log);
   },
-  onStrike() {
-    const m = { x: 0, y: 0, z: 0, life: 18, power: 1 };
-    fire.matches.push(m); matchRef = m;
-    audio?.strike(0);
-    return m;
+  onMatch(p) {
+    fire.matches.push({ x: p.x, y: p.y, z: p.z, life: 18, power: 1 });
+    audio?.strike(panOf([p.x, p.y, p.z]));
   },
-  onPlaceMatch() { matchRef = null; },
-  onToast: toast,
+  onToolChange: (k, stage) => ui.setTool(k, stage),
 });
+
+// 最初からやり直す（モードを選び直す）
+function resetWorld() {
+  for (const l of [...fire.logs]) removeLog(l);
+  fire = makeFire();
+  input.setTool(null);
+}
 
 if (DEBUG) window.__t.input = input;
 
@@ -262,12 +272,12 @@ if (hasSave) { const b3 = document.createElement('button'); b3.textContent = '�
 go.onclick = () => begin(hasSave ? 'load' : 'new');
 b2.onclick = () => begin('lit');
 function begin(mode) {
-  audio = createAudio(); audio.resume();
+  if (!audio) { audio = createAudio(); audio.resume(); }
   if (mode === 'load') load();
   else if (mode === 'lit') prebuilt();
   else toast('新聞紙を置き、小枝をのせ、マッチで火をつける', 6000);
-  $('start').remove();
-  $('hud').innerHTML = '<span>つかむ・投げる：ドラッグ</span><span>マッチ：台の上の箱</span><span>吹く：スペース</span><span>マイク：V</span><span>音：M</span>';
+  $('start')?.remove();
+  if (!started) ui.mount();
   started = true;
 }
 if (new URLSearchParams(location.search).has('autostart')) begin(new URLSearchParams(location.search).get('autostart') || 'lit');

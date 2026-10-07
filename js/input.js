@@ -1,60 +1,84 @@
-// 操作：つかむ・投げる（薪の山から）、火ばさみ（火の中の薪）、マッチ、吹く、見回す
+// 操作：棚で選んで、台の上でクリックして置く（落ちる場所に半透明の影を出す）。マッチ、火ばさみ、吹く、見回す
+// 3D で拾って運ぶのはやめた：カーソルと薪がずれて不自然だったため。置いたあとは物理で落ちて転がる
 import * as THREE from 'three';
+import { makeLog } from './burn/log.js';
+import { LogView } from './logs3d.js';
+import { TRAY } from './burn/fire.js';
 
-export function createInput({ canvas, camera, scene, physics, getLogByMesh, onSpawn, onStrike, onPlaceMatch, onToast }) {
+export function createInput({ canvas, camera, scene, physics, getLogByMesh, fireTargets, onPlace, onMatch, onToolChange }) {
   const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
   const view = { yaw: 0, pitch: 0.5, dist: 1.3, target: new THREE.Vector3(0, 0.36, 0) };
-  const st = { grab: null, match: null, look: null, blowKey: false, blowMic: 0, hover: null };
-  const tmp = new THREE.Vector3();
+  const st = { tool: null, yaw: Math.random() * 6.28, down: null, look: null, sel: null, move: null, blowKey: false, blowMic: 0, last: null };
+
+  // 落ちる場所の影（材料ごとに形を1回だけ作る）
+  const ghostMat = new THREE.MeshBasicMaterial({ color: 0xffe8c8, transparent: true, opacity: 0.28, depthWrite: false });
+  const ghosts = {};
+  function ghostFor(key) {
+    if (ghosts[key]) return ghosts[key];
+    let m;
+    if (key === 'match') m = new THREE.Mesh(new THREE.SphereGeometry(0.008, 12, 8), new THREE.MeshBasicMaterial({ color: 0xffb060 }));
+    else { const v = new LogView(makeLog(key)); m = new THREE.Mesh(v.mesh.geometry, ghostMat); m.userData.dims = v.log; }
+    m.visible = false; m.raycast = () => {}; m.renderOrder = 12;
+    scene.add(m);
+    return (ghosts[key] = m);
+  }
+  const marker = new THREE.Mesh(new THREE.TorusGeometry(0.05, 0.004, 8, 32), new THREE.MeshBasicMaterial({ color: 0xffe8c8, transparent: true, opacity: 0.6, depthWrite: false }));
+  marker.rotation.x = Math.PI / 2; marker.visible = false; marker.raycast = () => {};
+  scene.add(marker);
 
   function setRay(e) {
     const r = canvas.getBoundingClientRect();
     ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
     ray.setFromCamera(ndc, camera);
   }
-  function hitScene() {
-    const hits = ray.intersectObjects(scene.children, true).filter((h) => h.object.visible && !h.object.userData.noPick && h.object.type === 'Mesh' && !h.object.isInstancedMesh);
-    return hits[0] || null;
+  // 台の上の、置ける所（熾火の床・台・火の中の薪）。外れていれば台の高さの面で受ける
+  function placePoint() {
+    const h = ray.intersectObjects(fireTargets(), true)[0];
+    let p;
+    if (h) p = h.point.clone();
+    else {
+      const o = ray.ray.origin, d = ray.ray.direction;
+      if (d.y > -1e-3) return null;
+      p = o.clone().addScaledVector(d, (TRAY.y - o.y) / d.y);
+    }
+    if (Math.abs(p.x) > TRAY.x + 0.12 || Math.abs(p.z) > TRAY.z + 0.12) return null;
+    return p;
   }
-  // 手の届く場所：指している物（台・熾火・薪・地面）の少し上。火を指して離せば、そのまま中に落ちる
-  function handPoint(lift, skip) {
-    const hits = ray.intersectObjects(scene.children, true).filter((x) => x.object.type === 'Mesh' && !x.object.isInstancedMesh && !x.object.userData.noPick && !isPart(x.object, skip));
-    if (hits[0] && hits[0].distance < 3) return hits[0].point.clone().add(new THREE.Vector3(0, lift, 0));
-    const o = ray.ray.origin, d = ray.ray.direction;
-    let t = d.y < -1e-3 ? (lift + 0.3 - o.y) / d.y : 1.2;
-    t = clamp(t, 0.3, 2.2);
-    tmp.copy(o).addScaledVector(d, t);
-    tmp.x = clamp(tmp.x, -1.2, 1.2); tmp.z = clamp(tmp.z, -0.9, 1.0);
-    tmp.y = Math.max(0.05, tmp.y);
-    return tmp.clone();
+  // 薪の形が占める範囲の真下で、いちばん高い物の上に載せる（めり込んで出すと、はじき飛ばされる）
+  const down = new THREE.Raycaster(); down.far = 2;
+  function landing(p, yaw, dims) {
+    const c = Math.cos(yaw), s = Math.sin(yaw);
+    let top = TRAY.y;
+    for (const a of [-0.5, -0.25, 0, 0.25, 0.5]) for (const b of [-0.5, 0, 0.5]) {
+      const lx = a * dims.L, lz = b * dims.w;
+      down.set(new THREE.Vector3(p.x + c * lx + s * lz, 1.2, p.z - s * lx + c * lz), new THREE.Vector3(0, -1, 0));
+      const h = down.intersectObjects(fireTargets(), true)[0];
+      if (h) top = Math.max(top, h.point.y);
+    }
+    return top + dims.h / 2 + 0.006;
+  }
+  const pickLog = () => {
+    for (const h of ray.intersectObjects(fireTargets(), true)) { const lv = getLogByMesh(h.object); if (lv) return lv.log; }
+    return null;
+  };
+
+  function setTool(k) {
+    for (const g of Object.values(ghosts)) g.visible = false;
+    st.tool = k; st.sel = null; marker.visible = false;
+    onToolChange(k, false);
   }
 
   canvas.addEventListener('contextmenu', (e) => e.preventDefault());
   canvas.addEventListener('pointerdown', (e) => {
-    canvas.setPointerCapture(e.pointerId);
     setRay(e);
-    if (e.button === 2) { st.blowKey = true; return; }
-    // マッチを持っているとき：もう一度クリックで、その場に置く
-    if (st.match) { onPlaceMatch(st.match); st.match = null; return; }
-    // つかめる物（材料の山・火の中の薪）を、地面や台より優先して拾う
-    const hs = ray.intersectObjects(scene.children, true).filter((x) => x.object.type === 'Mesh' && !x.object.isInstancedMesh && !x.object.userData.noPick);
-    const h = hs.find((x) => findUp(x.object, (o) => o.userData.pile || o.userData.logView)) || null;
-    const pile = h && findUp(h.object, (o) => o.userData.pile);
-    if (pile?.userData.pile === 'match') { st.match = onStrike(); return; }
-    if (pile) {
-      const p = h.point.clone().add(new THREE.Vector3(0, 0.12, 0));
-      const log = onSpawn(pile.userData.pile, p);
-      if (!log) return;
-      st.grab = { log, h: 0.1, tongs: false };
-      return;
-    }
-    const lv = h && getLogByMesh(h.object);
-    if (lv) { st.grab = { log: lv.log, h: 0.04, tongs: true }; onToast(lv.log.T.some((t) => t > 120) ? '火ばさみでつかんだ' : ''); return; }
-    st.look = { x: e.clientX, y: e.clientY, yaw: view.yaw, pitch: view.pitch };
+    if (e.button === 2) { if (st.tool) setTool(null); else st.blowKey = true; return; }
+    canvas.setPointerCapture(e.pointerId);
+    st.down = { x: e.clientX, y: e.clientY, yaw: view.yaw, pitch: view.pitch };
   });
   canvas.addEventListener('pointermove', (e) => {
-    setRay(e);
-    st.lastEvent = e;
+    setRay(e); st.last = e;
+    const d = st.down;
+    if (d && !st.look && Math.hypot(e.clientX - d.x, e.clientY - d.y) > 6) st.look = d;
     if (st.look) {
       view.yaw = clamp(st.look.yaw - (e.clientX - st.look.x) * 0.004, -0.75, 0.75);
       view.pitch = clamp(st.look.pitch + (e.clientY - st.look.y) * 0.003, 0.18, 0.8);
@@ -62,56 +86,81 @@ export function createInput({ canvas, camera, scene, physics, getLogByMesh, onSp
   });
   const up = (e) => {
     if (e.button === 2) { st.blowKey = false; return; }
-    st.look = null;
-    // ゆっくり離したら「置く」（勢いを消す）。速く振って離したら「投げる」
-    if (st.grab) { const b = physics.body(st.grab.log); if (b && st.speed < 0.8) { b.setLinvel({ x: 0, y: 0, z: 0 }, true); b.setAngvel({ x: 0, y: 0, z: 0 }, true); } st.grab = null; }
+    const wasLook = !!st.look; st.look = null; st.down = null;
+    if (wasLook || e.type === 'pointercancel') return;
+    setRay(e);
+    click();
   };
   canvas.addEventListener('pointerup', up);
   canvas.addEventListener('pointercancel', up);
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
-    if (st.grab) st.grab.h = clamp(st.grab.h - e.deltaY * 0.0003, 0.0, 0.5);   // つかんだまま上げ下げ
+    if (st.tool && st.tool !== 'match' && st.tool !== 'tongs') st.yaw += e.deltaY * 0.004;   // 向きを回す
     else view.dist = clamp(view.dist + e.deltaY * 0.0012, 0.55, 2.4);
   }, { passive: false });
-  addEventListener('keydown', (e) => { if (e.code === 'Space') { st.blowKey = true; e.preventDefault(); } if (e.code === 'Escape' && st.match) { st.match.life = 0; st.match = null; } });
+  addEventListener('keydown', (e) => {
+    if (e.code === 'Space' && e.target === document.body) { st.blowKey = true; e.preventDefault(); }
+    if (e.code === 'Escape') setTool(null);
+  });
   addEventListener('keyup', (e) => { if (e.code === 'Space') st.blowKey = false; });
 
+  function click() {
+    const k = st.tool;
+    if (!k) return;
+    if (k === 'match') { const p = placePoint(); if (p) onMatch(p.add(new THREE.Vector3(0, 0.012, 0))); return; }
+    if (k === 'tongs') {
+      if (!st.sel) { const l = pickLog(); if (l) { st.sel = l; onToolChange('tongs', true); } return; }
+      const p = placePoint(); if (!p) return;
+      st.move = { log: st.sel, to: p, t: 0 };
+      st.sel = null; onToolChange('tongs', false);
+      return;
+    }
+    const g = ghostFor(k);
+    if (!g.visible) return;
+    onPlace(k, g.position.clone().add(new THREE.Vector3(0, 0.01, 0)), g.quaternion.clone());
+    st.yaw += (Math.random() - 0.5) * 0.6;   // 次の1本は少し向きを変えておく
+  }
+
   return {
-    st, view,
+    st, view, setTool,
     get blowing() { return st.blowKey || st.blowMic > 0.5; },
-    // 毎フレーム：カメラと、つかんでいる物を動かす
     update(dt) {
       const c = Math.cos(view.pitch), s = Math.sin(view.pitch);
       camera.position.set(view.target.x + Math.sin(view.yaw) * c * view.dist, view.target.y + s * view.dist, view.target.z + Math.cos(view.yaw) * c * view.dist);
       camera.lookAt(view.target);
-      if (st.lastEvent) setRay(st.lastEvent);
-      if (st.grab) {
-        const body = physics.body(st.grab.log);
-        if (!body) { st.grab = null; return; }
-        const goal = handPoint(st.grab.h, st.grab.log), p = body.translation();
-        // 手で運ぶ間は台の縁より高く持つ（台の下をくぐらせない）
-        if (!st.grab.tongs) goal.y = Math.max(goal.y, 0.46);
-        let vx = (goal.x - p.x) * 14, vy = (goal.y - p.y) * 14, vz = (goal.z - p.z) * 14;
-        const sp = Math.hypot(vx, vy, vz), max = st.grab.tongs ? 1.6 : 4.5;
-        if (sp > max) { vx *= max / sp; vy *= max / sp; vz *= max / sp; }
-        body.setLinvel({ x: vx, y: vy, z: vz }, true);
-        st.speed = Math.hypot(vx, vy, vz);
-        const w = body.angvel(); body.setAngvel({ x: w.x * 0.85, y: w.y * 0.85, z: w.z * 0.85 }, true);
+      if (st.last) setRay(st.last);
+      // 落ちる場所の影
+      for (const [key, g] of Object.entries(ghosts)) if (key !== st.tool) g.visible = false;
+      if (st.tool && st.tool !== 'tongs' && !st.look) {
+        const g = ghostFor(st.tool), p = placePoint();
+        g.visible = !!p;
+        if (p) {
+          const dims = g.userData.dims;
+          g.position.copy(p);
+          g.position.y = dims ? landing(p, st.yaw, dims) : p.y + 0.012;
+          g.quaternion.setFromEuler(new THREE.Euler(0, st.yaw, 0));
+        }
       }
-      if (st.match) {
-        const h = hitScene();
-        const p = h && h.distance < 2.5 ? h.point.clone().add(new THREE.Vector3(0, 0.012, 0)) : handPoint(0.4);
-        st.match.x = p.x; st.match.y = p.y; st.match.z = p.z;
-        if (st.match.life <= 0) st.match = null;
+      // 火ばさみ：選んだ薪の上に輪、動かしている間は押して運ぶ
+      marker.visible = !!st.sel;
+      if (st.sel) { const p = st.sel.pose.p; marker.position.set(p[0], p[1] + 0.06, p[2]); }
+      if (st.move) {
+        const m = st.move, body = physics.body(m.log);
+        m.t += dt;
+        if (!body || m.t > 1.2) { if (body) { body.setLinvel({ x: 0, y: 0, z: 0 }, true); body.setAngvel({ x: 0, y: 0, z: 0 }, true); } st.move = null; }
+        else {
+          const p = body.translation(), lift = m.t < 0.9 ? 0.05 : 0;
+          let vx = (m.to.x - p.x) * 8, vy = (m.to.y + lift - p.y) * 8, vz = (m.to.z - p.z) * 8;
+          const sp = Math.hypot(vx, vy, vz); if (sp > 1.2) { vx *= 1.2 / sp; vy *= 1.2 / sp; vz *= 1.2 / sp; }
+          body.setLinvel({ x: vx, y: vy, z: vz }, true);
+          const w = body.angvel(); body.setAngvel({ x: w.x * 0.8, y: w.y * 0.8, z: w.z * 0.8 }, true);
+        }
       }
     },
   };
 }
 
-// つかんでいる薪自身には当てない
-function isPart(o, log) { if (!log) return false; while (o) { if (o.userData.logView?.log === log) return true; o = o.parent; } return false; }
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
-function findUp(o, f) { while (o) { if (f(o)) return o; o = o.parent; } return null; }
 
 // マイクで吹く：低い音の大きさ（息のゴーッという音）を拾う
 export async function startMic(st) {
