@@ -27,7 +27,7 @@ const CSS = `
 
 const HINTS = {
   none: '材料を選ぶ ・ 何もない所をドラッグで見回す ・ ホイールで近づく ・ スペースで吹く',
-  wood: 'クリックで置く ・ ホイールで向きを回す ・ 右クリックでやめる',
+  wood: '石の囲いの上でクリックして置く ・ ホイールで向きを回す ・ 右クリックでやめる',
   match: 'クリックで擦って、その場所に置く',
   tongs: '動かす薪をクリック → 動かしたい先をクリック',
   tongs2: '動かしたい先をクリック（右クリックでやめる）',
@@ -52,7 +52,7 @@ export function createUI({ onSelect, onMode, onSound }) {
   const sound = item('音を消す', () => { sound.textContent = onSound() ? '音を出す' : '音を消す'; });
   const helpBtn = item('操作の説明', () => { help.style.display = help.style.display === 'block' ? 'none' : 'block'; });
   const help = document.createElement('div'); help.className = 'help';
-  help.innerHTML = '下の棚で材料を選び、台の上でクリックすると置ける（ホイールで向き）。<br>マッチ：選んでクリックで擦って置く。<br>火ばさみ：薪をクリック→動かす先をクリック。<br>スペース長押しで吹く（V でマイク）。<br>何もない所をドラッグで見回す。';
+  help.innerHTML = '下の棚で材料を選ぶとカーソルについてくる。石の囲いの上でクリックすると置ける（ホイールで向き）。<br>マッチ：選んでクリックで擦って置く。<br>火ばさみ：薪をクリック→動かす先をクリック。<br>スペース長押しで吹く（V でマイク）。<br>何もない所をドラッグで見回す。';
   menu.append(help);
   const close = () => { menu.style.display = 'none'; };
   menuBtn.onclick = (e) => { e.stopPropagation(); menu.style.display = menu.style.display === 'block' ? 'none' : 'block'; };
