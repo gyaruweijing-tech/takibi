@@ -8,3 +8,8 @@ footage/
 *.mov
 *.MOV
 *.m4v
+
+# 正解集の写真（本人の動画の切り出し・ネットの写真）。公開しない
+reference/
+# AI への指示書は手元だけ（公開しない）
+CLAUDE.md
