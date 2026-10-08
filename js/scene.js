@@ -150,7 +150,7 @@ export function makeStone(seed) {
 }
 export function stoneMaterial(rockMat, sootToFire = true) {
   const mat = rockMat ? rockMat.clone() : new THREE.MeshStandardMaterial();
-  mat.color = new THREE.Color(0x5e5a56); mat.roughness = 1; mat.metalness = 0;
+  mat.color = new THREE.Color(0x7e7c79); mat.roughness = 1; mat.metalness = 0;   // 2026-10-08 本人「もう少しグレー」
   if (!sootToFire) return mat;
   // 火に向いた側の上ほど煤で黒い（面の向きと高さで決める）
   mat.onBeforeCompile = (sh) => {

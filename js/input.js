@@ -1,7 +1,8 @@
 // 操作：棚で選ぶと、その材料がカーソルにくっついてくる。クリックでその場に置く。マッチ、火ばさみ、吹く、見回す
 // 持っている物の中心はいつもカーソルの光線の上にあり、高さは「そこに置いたら止まる高さ」（物理と同じ形を真下に落として求める）
 // → 画面の上で、カーソルと物がずれない。石の囲いの上では、囲いの内側に収まる所まで寄せる（見えない壁に当たる）
-// ホイールで持ち上げると、その高さから落とせる（スイカゲーム）。真下に線、落ちて止まる所に薄い影
+// ホイールで持ち上げると、その高さから落とせる（画面の限界まで）。止まる所の予告はしない（動物タワーバトルと同じ。読むのは人）
+// 高さが分かるように、真下に丸い影だけ落とす（予測ではなく今の真下。毎コマ計算するのでワープしない）
 import * as THREE from 'three';
 import { makeLog } from './burn/log.js';
 import { LogView } from './logs3d.js';
@@ -77,21 +78,25 @@ export function createInput({ canvas, camera, scene, physics, getLogByMesh, fire
     const tf = d.y < -1e-3 ? (0 - o.y) / d.y : -1;
     const inside = tf > 0 && Math.hypot(o.x + d.x * tf, o.z + d.z * tf) < AIM;
     const f = (t) => o.y + d.y * t - poseAt(t, log, yaw, inside).y - lift;
-    // 手前から順に見て、最初に「置いたら止まる高さ」を下回った区間を二分法で詰める
-    let a = 0.05, b = t1;
-    for (let i = 1; i <= 24; i++) { const m = a + (t1 - 0.05) / 24; if (f(m) <= 0) { b = m; break; } a = m; }
-    if (f(b) <= 0) for (let i = 0; i < 12; i++) { const m = (a + b) / 2; if (f(m) > 0) a = m; else b = m; }
-    // 手の位置（いつもカーソルの光線の上）と、置かれる所。壁で止まったときだけ2つが離れる
+    // 手前から順に見て、最初に「置いたら止まる高さ＋持ち上げた高さ」を下回った区間を二分法で詰める
+    // 持ち上げすぎてカメラの目の前（35cm）まで来たら、そこが上の限界（画面の限界）
+    const T0 = 0.35;
+    let a = T0, b = t1;
+    if (f(T0) <= 0) b = T0;
+    else {
+      for (let i = 1; i <= 24; i++) { const m = a + (t1 - T0) / 24; if (f(m) <= 0) { b = m; break; } a = m; }
+      if (f(b) <= 0) for (let i = 0; i < 12; i++) { const m = (a + b) / 2; if (f(m) > 0) a = m; else b = m; }
+    }
     const P = poseAt(b, log, yaw, inside); P.inside = inside;
     P.hand = new THREE.Vector3(o.x + d.x * b, o.y + d.y * b, o.z + d.z * b);
-    P.lift = lift;
-    P.apart = P.hand.distanceTo(new THREE.Vector3(P.x, P.y + lift, P.z)) > 0.015 || lift > 0.015;
+    P.lift = Math.max(0, Math.min(lift, P.hand.y - P.y));   // 実際に持ち上がっている高さ（限界で頭打ち）
     return P;
   }
-  const hold = { pose: null, key: '', since: 0, pred: null, predKey: '', lift: 0 };
-  // 落ちる線（手から、落ちて止まる所まで）
-  const dropLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]), new THREE.LineDashedMaterial({ color: 0xffe8c8, transparent: true, opacity: 0.5, dashSize: 0.012, gapSize: 0.01, depthTest: false }));
-  dropLine.visible = false; dropLine.raycast = () => {}; dropLine.renderOrder = 13; scene.add(dropLine);
+  const hold = { pose: null, lift: 0 };
+  // 真下の丸い影（高いほど大きく薄い）
+  const blobTex = (() => { const c = document.createElement('canvas'); c.width = c.height = 64; const x = c.getContext('2d'), gr = x.createRadialGradient(32, 32, 0, 32, 32, 32); gr.addColorStop(0, 'rgba(0,0,0,1)'); gr.addColorStop(0.5, 'rgba(0,0,0,0.6)'); gr.addColorStop(1, 'rgba(0,0,0,0)'); x.fillStyle = gr; x.fillRect(0, 0, 64, 64); return new THREE.CanvasTexture(c); })();
+  const blob = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ map: blobTex, color: 0x000000, transparent: true, depthWrite: false }));
+  blob.rotation.x = -Math.PI / 2; blob.visible = false; blob.raycast = () => {}; blob.renderOrder = 11; scene.add(blob);
   const pickLog = () => {
     for (const h of ray.intersectObjects(fireTargets(), true)) { const lv = getLogByMesh(h.object); if (lv) return lv.log; }
     return null;
@@ -132,7 +137,7 @@ export function createInput({ canvas, camera, scene, physics, getLogByMesh, fire
     e.preventDefault();
     if (st.tool && st.tool !== 'match' && st.tool !== 'tongs') {
       if (e.shiftKey) st.yaw += (e.deltaY || e.deltaX) * 0.004;                      // Shift＋ホイール：向きを回す
-      else hold.lift = clamp(hold.lift - e.deltaY * 0.0006, 0, 0.4);                 // ホイール：持ち上げる高さ（0〜40cm）
+      else hold.lift = clamp(hold.lift - e.deltaY * 0.0012, 0, 3);                   // ホイール：持ち上げる高さ（上は画面の限界で止まる）
     }
     else view.dist = clamp(view.dist + e.deltaY * 0.0012, 0.55, 2.4);
   }, { passive: false });
@@ -156,7 +161,7 @@ export function createInput({ canvas, camera, scene, physics, getLogByMesh, fire
     const P = hold.pose;
     if (!P) return;
     if (!P.inside) { onMiss?.(); return; }
-    const drop = P.lift > 0.015;
+    const drop = P.lift > 0.015;   // 持ち上げていれば、その高さから落とす
     onPlace(k, new THREE.Vector3(P.x, P.y + (drop ? P.lift : 0.003), P.z), new THREE.Quaternion().setFromEuler(new THREE.Euler(0, P.yaw, 0)), drop);
     st.yaw += (Math.random() - 0.5) * 0.6;   // 次の1本は少し向きを変えておく
   }
@@ -176,33 +181,24 @@ export function createInput({ canvas, camera, scene, physics, getLogByMesh, fire
         const g = ghostFor(st.tool), log = g.userData.log;
         if (!log) { const p = placePoint(); g.visible = !!p; if (p) g.position.set(p.x, p.y + 0.012, p.z); }
         else {
-          // 囲いの上：手に持った本物＋（離れたときだけ）置かれる所に薄い影。外：半透明で手についてくるだけ（置けない）
+          // 囲いの上：本物を、落とす所（壁の内側に寄せた位置・持ち上げた高さ）に。外：半透明で手についてくるだけ（置けない）
           const P = hold.pose = holdPose(log, st.yaw, hold.lift), dim = g.userData.dim;
-          if (P.apart) g.position.copy(P.hand); else g.position.set(P.x, P.y + 0.01, P.z);
+          hold.lift = Math.min(hold.lift, P.lift + 0.002);   // 限界より上にホイールを回しても溜めない
           g.quaternion.setFromEuler(new THREE.Euler(0, P.yaw, 0));
-          g.visible = P.inside; dim.visible = !P.inside; dropLine.visible = false;
+          g.visible = P.inside; dim.visible = !P.inside; blob.visible = false;
           if (!P.inside) { dim.position.copy(P.hand); dim.quaternion.copy(g.quaternion); }
           else {
-            // 止まる所の先回り：カーソルが 0.08 秒止まったら1回だけ計算（動かしている間は計算しない＝カクつかない）
-            const drop = P.lift > 0.015;
-            const key = `${st.tool}|${P.x.toFixed(3)}|${P.z.toFixed(3)}|${P.y.toFixed(3)}|${P.yaw.toFixed(2)}|${P.lift.toFixed(3)}|${fireTargets().length}`;
-            const now = performance.now();
-            if (key !== hold.key) { hold.key = key; hold.since = now; }
-            else if (hold.predKey !== key && now - hold.since > 80) { hold.pred = physics.predict(log, P.x, P.y + (drop ? P.lift : 0.003), P.z, P.yaw, drop ? 'drop' : true); hold.predKey = key; }
-            // 止まる所：持ち上げているとき・壁で止まったとき・手の位置から 1.5cm／10° 以上ずれるときに薄い影
-            let gp = null, gq = g.quaternion;
-            if (hold.predKey === key && hold.pred) {
-              const q = new THREE.Quaternion().fromArray(hold.pred.q);
-              const far = Math.hypot(hold.pred.p[0] - P.x, hold.pred.p[1] - P.y, hold.pred.p[2] - P.z) > 0.015 || q.angleTo(g.quaternion) > 0.17;
-              if (far || P.apart) { gp = new THREE.Vector3().fromArray(hold.pred.p); gq = q; }
-            } else if (P.apart) gp = new THREE.Vector3(P.x, P.y, P.z);
-            if (gp) {
-              dim.visible = true; dim.position.copy(gp); dim.quaternion.copy(gq);
-              if (drop) { dropLine.visible = true; dropLine.geometry.setFromPoints([g.position, gp]); dropLine.computeLineDistances(); }
+            g.position.set(P.x, P.y + Math.max(0.01, P.lift), P.z);
+            // 真下の丸い影：持ち上げているときだけ。高いほど大きく薄い
+            if (P.lift > 0.02) {
+              const gy = physics.floorY(P.x, g.position.y, P.z) ?? TRAY.y;
+              const h = g.position.y - gy, size = Math.max(log.L, log.w) * 0.9 * (1 + h * 0.6);
+              blob.visible = true; blob.position.set(P.x, gy + 0.004, P.z); blob.scale.set(size, size * Math.min(1, (log.w + 0.1) / log.L + 0.3), 1);
+              blob.rotation.z = P.yaw; blob.material.opacity = 0.6 * Math.max(0.15, 1 - h / 1.5);
             }
           }
         }
-      } else dropLine.visible = false;
+      } else blob.visible = false;
       // 火ばさみ：選んだ薪の上に輪、動かしている間は押して運ぶ
       marker.visible = !!st.sel;
       if (st.sel) { const p = st.sel.pose.p; marker.position.set(p[0], p[1] + 0.06, p[2]); }

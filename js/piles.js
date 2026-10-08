@@ -31,6 +31,7 @@ export function buildPiles(scene) {
   // 左の平たい岩（机の代わり。上が平らに割れた大きな石）
   const stool = new THREE.Group(); stool.name = 'stool';
   const slab = new THREE.Mesh(makeStone(0.73), stoneMaterial(scene.userData.rockMat, false));
+  slab.material.color.set(0x5e5a56);   // 平たい岩は炉の石より暗いまま
   slab.scale.set(0.2, 0.09, 0.15); slab.position.y = 0.055;
   stool.add(slab);
   stool.position.set(-0.74, 0, 0.46); stool.rotation.y = 0.3;

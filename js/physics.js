@@ -86,17 +86,10 @@ export async function createPhysics() {
       world.step();
       for (const b of bodies.values()) if (b.settle > 0 && --b.settle === 0) { b.body.setLinearDamping(b.ld); b.body.setAngularDamping(b.ad); }
     },
-    // 置いたあとどこで止まるかを先回りして計算する（世界を丸ごと写して、写しの中で置いて2秒進める）。add(…, settle) と同じ設定で
-    predict(log, x, y, z, yaw, settle = true) {
-      const w2 = RAPIER.World.restoreSnapshot(world.takeSnapshot());
-      const b = w2.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(x, y, z).setRotation({ x: 0, y: Math.sin(yaw / 2), z: 0, w: Math.cos(yaw / 2) })
-        .setLinearDamping(0.05).setAngularDamping(log.t.kind === 'ball' ? 2 : 0.4).setCcdEnabled(true));
-      w2.createCollider(colliderFor(log, 1), b);
-      applySettle(b, settle);
-      for (let i = 0; i < 120; i++) { if (i === 90) { b.setLinearDamping(0.05); b.setAngularDamping(log.t.kind === 'ball' ? 2 : 0.4); } w2.step(); }
-      const t = b.translation(), r = b.rotation(), out = { p: [t.x, t.y, t.z], q: [r.x, r.y, r.z, r.w] };
-      w2.free();
-      return out;
+    // 真下の面の高さ（持っている物の丸い影を落とす所）。見えない壁は無視する
+    floorY(x, fromY, z) {
+      const hit = world.castRay(new RAPIER.Ray({ x, y: fromY, z }, { x: 0, y: -1, z: 0 }), 3, true, undefined, undefined, undefined, undefined, (c) => !walls.has(c.handle));
+      return hit ? fromY - (hit.timeOfImpact ?? hit.toi) : null;
     },
     // うそをつかない影：物理と同じ形を (x,z) の真上から真下へ落とし、最初に当たる高さ（中心の y）を返す
     restY(log, x, z, yaw) {
