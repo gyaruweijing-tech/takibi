@@ -1,8 +1,10 @@
-// 場面：草の上の石組みの炉（焚き火台）、後ろに岩、奥に木。座って見下ろす目線（本人の写真の構図）
+// 場面：草の地面に掘った石囲炉（焚き火）、後ろに岩、奥に木。座って見下ろす目線（本人の写真の構図）
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
-import { TRAY, PIT } from './burn/fire.js';
+import { TRAY } from './burn/fire.js';
+
+const HOLE_R = TRAY.r + 0.07;   // 地面に空けるくぼみの穴（縁の土の斜面ぶん、囲いより少し広い）
 
 const TEX = 'assets/polyhaven/textures/';
 const loader = new THREE.TextureLoader();
@@ -68,8 +70,13 @@ export async function buildScene(renderer) {
 
   // 地面：草と土
   const g = pbr('grass_ground', 14);
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(30, 30, 1, 1), new THREE.MeshStandardMaterial({ ...g, roughness: 1, normalScale: new THREE.Vector2(1.2, 1.2) }));
-  ground.geometry.setAttribute('uv1', ground.geometry.attributes.uv);
+  // 地面には炉のくぼみの穴を空ける（模様の大きさは前と同じ：30m に 14 回）
+  const outline = new THREE.Shape([[-15, -15], [15, -15], [15, 15], [-15, 15]].map(([x, y]) => new THREE.Vector2(x, y)));
+  outline.holes.push(new THREE.Path().absarc(0, 0, HOLE_R, 0, Math.PI * 2, true));
+  const gGeo = new THREE.ShapeGeometry(outline, 48);
+  const uvA = gGeo.attributes.uv; for (let i = 0; i < uvA.count; i++) uvA.setXY(i, (uvA.getX(i) + 15) / 30, (uvA.getY(i) + 15) / 30);
+  gGeo.setAttribute('uv1', gGeo.attributes.uv);
+  const ground = new THREE.Mesh(gGeo, new THREE.MeshStandardMaterial({ ...g, roughness: 1, normalScale: new THREE.Vector2(1.2, 1.2) }));
   ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true;
   scene.add(ground);
   const grass = makeGrass(); grass.name = 'grass'; scene.add(grass);
@@ -86,6 +93,7 @@ export async function buildScene(renderer) {
   rockScene.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
   scene.add(rockScene);
   let rockMat = null; rockScene.traverse((o) => { if (o.isMesh && !rockMat) rockMat = o.material; });
+  scene.userData.rockMat = rockMat;
   const stand = makeHearth(rockMat);
   scene.add(stand);
 
@@ -116,88 +124,90 @@ async function loadGltf(gl, base, file) {
   return gl.parseAsync(JSON.stringify(j), base);
 }
 
-// 石組みの炉：地面から石を4段積み、上の段の内側が囲い（本人の参考画像の、石で囲んだ焚き火）
-// 石は低い多面体を少しずつ歪めた形を6種類。色は後ろの岩と同じ素材。当たり判定は physics.js の石の帯と見えない壁
+// 石囲炉：地面を10cm掘ったくぼみ（焦げた土のお椀形）と、縁に半分埋まった大きな石（本人の参考画像）
+// 石は低い多面体を歪めた形。色は後ろの岩と同じ素材で、火に向いた上の方ほど煤で黒い。当たり判定は physics.js
+export function makeStone(seed) {
+  const g = mergeVertices(new THREE.IcosahedronGeometry(1, 3).deleteAttribute('normal').deleteAttribute('uv')), p = g.attributes.position;
+  const r = (k) => Math.sin(seed * 12.9898 + k * 78.233) * 0.5 + 0.5;
+  // 割れた平たい面を6〜7枚（角ばった岩にする。丸いと枕やパンに見える）
+  const cuts = [];
+  for (let k = 0; k < 7; k++) { const th = r(20 + k) * Math.PI * 2, ph = Math.acos(r(30 + k) * 2 - 1); cuts.push([new THREE.Vector3(Math.sin(ph) * Math.cos(th), Math.cos(ph), Math.sin(ph) * Math.sin(th)), 0.62 + r(40 + k) * 0.25]); }
+  cuts.push([new THREE.Vector3(0, -1, 0), 0.55]);
+  const v = new THREE.Vector3();
+  for (let i = 0; i < p.count; i++) {
+    const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+    // 大きなうねり＋割れた平たい面（丸いパンに見えないように）
+    const n = 1 + 0.12 * Math.sin(x * 2.3 + r(1) * 6) * Math.sin(y * 2.1 + r(2) * 6) + 0.08 * Math.sin(z * 3.7 + r(3) * 6) + 0.04 * Math.sin((x + y + z) * 11 + r(4) * 6);
+    v.set(x, y, z).multiplyScalar(n);
+    for (const [ax, k] of cuts) { const d = v.dot(ax); if (d > k) v.addScaledVector(ax, k - d); }
+    p.setXYZ(i, v.x, v.y, v.z);
+  }
+  g.computeVertexNormals();
+  const uv = new Float32Array(p.count * 2);
+  for (let i = 0; i < p.count; i++) { uv[i * 2] = Math.atan2(p.getZ(i), p.getX(i)) / (Math.PI * 2) + 0.5 + seed; uv[i * 2 + 1] = p.getY(i) * 0.5 + 0.5; }
+  g.setAttribute('uv', new THREE.BufferAttribute(uv, 2)); g.setAttribute('uv1', g.attributes.uv);
+  return g;
+}
+export function stoneMaterial(rockMat, sootToFire = true) {
+  const mat = rockMat ? rockMat.clone() : new THREE.MeshStandardMaterial();
+  mat.color = new THREE.Color(0x5e5a56); mat.roughness = 1; mat.metalness = 0;
+  if (!sootToFire) return mat;
+  // 火に向いた側の上ほど煤で黒い（面の向きと高さで決める）
+  mat.onBeforeCompile = (sh) => {
+    sh.vertexShader = 'varying vec3 vWp; varying vec3 vWn;\n' + sh.vertexShader.replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\n vWp = (modelMatrix * instanceMatrix * vec4(transformed, 1.0)).xyz; vWn = normalize(mat3(modelMatrix * instanceMatrix) * objectNormal);');
+    sh.fragmentShader = 'varying vec3 vWp; varying vec3 vWn;\n' + sh.fragmentShader.replace('#include <map_fragment>', `#include <map_fragment>
+      { float toFire = clamp(dot(normalize(-vec3(vWp.x, 0.0, vWp.z)), vWn) * 0.8 + vWn.y * 0.5, 0.0, 1.0);
+        float soot = toFire * smoothstep(-0.06, 0.08, vWp.y);
+        diffuseColor.rgb *= mix(1.0, 0.22, soot); }`);
+  };
+  return mat;
+}
 function makeHearth(rockMat) {
   const grp = new THREE.Group(); grp.name = 'hearth';
-  const ox = TRAY.x + 0.033 + PIT.stone / 2, oz = TRAY.z + 0.033 + PIT.stone / 2;   // 石の帯の中心線（半分の幅）
-  // 中身の土（石のすき間から草が見えないように）と、囲いの底
-  const earth = pbr('forrest_ground_03', 1);
-  const core = new THREE.Mesh(new THREE.BoxGeometry(ox * 2, TRAY.y - 0.004, oz * 2), new THREE.MeshStandardMaterial({ ...earth, color: 0x6a5f55, roughness: 1 }));
-  core.geometry.setAttribute('uv1', core.geometry.attributes.uv);
-  core.position.y = (TRAY.y - 0.004) / 2;
-  grp.add(core);
-  const soot = sootTexture();
-  const floor = new THREE.Mesh(new THREE.BoxGeometry(TRAY.x * 2 + 0.07, 0.004, TRAY.z * 2 + 0.07), new THREE.MeshStandardMaterial({ color: 0x3a342f, roughness: 1, map: soot }));
-  floor.position.y = TRAY.y - 0.002;
-  grp.add(floor);
-  // 石の形（6種類）
-  const shapes = [];
-  for (let k = 0; k < 6; k++) {
-    const g = mergeVertices(new THREE.IcosahedronGeometry(1, 3).deleteAttribute('normal').deleteAttribute('uv')), p = g.attributes.position, seed = k * 1.7 + 0.3;
-    for (let i = 0; i < p.count; i++) {
-      const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
-      const n = 1 + 0.16 * Math.sin(x * 3.1 + seed) * Math.sin(y * 2.7 + seed * 2) + 0.1 * Math.sin(z * 4.3 + seed * 3);
-      p.setXYZ(i, x * n, Math.max(-0.75, y * n), z * n);   // 下は平らに（積みやすい形）
-    }
-    g.computeVertexNormals();
-    // 球の写し方で模様を貼る（向きでつながる）
-    const uv = new Float32Array(p.count * 2);
-    for (let i = 0; i < p.count; i++) { const x = p.getX(i), y = p.getY(i), z = p.getZ(i); uv[i * 2] = Math.atan2(z, x) / (Math.PI * 2) + 0.5; uv[i * 2 + 1] = y * 0.5 + 0.5; }
-    g.setAttribute('uv', new THREE.BufferAttribute(uv, 2)); g.setAttribute('uv1', g.attributes.uv);
-    shapes.push(g);
-  }
-  const mat = rockMat ? rockMat.clone() : new THREE.MeshStandardMaterial({ roughness: 0.95 });
-  mat.color = new THREE.Color(0x8a8580); mat.roughness = 1; mat.metalness = 0;
-  // 角を丸めた長方形の上に、段ごとに少しずらして並べる（下の段ほど外へ・大きく）
+  const R = TRAY.r, D = -TRAY.y;
+  // くぼみ：縁（地面の高さ）から斜めに下りて、底は平ら。焦げた土
+  const earth = pbr('burned_ground_01', 2);
+  const prof = [[0.001, TRAY.y - 0.002], [R, TRAY.y - 0.002], [R + 0.03, TRAY.y + D * 0.45], [HOLE_R, -0.004], [HOLE_R + 0.02, 0.0]].map(([x, y]) => new THREE.Vector2(x, y));
+  const bowl = new THREE.Mesh(new THREE.LatheGeometry(prof, 64), new THREE.MeshStandardMaterial({ ...earth, color: 0x6e655c, roughness: 1, side: THREE.DoubleSide }));
+  bowl.geometry.setAttribute('uv1', bowl.geometry.attributes.uv);
+  grp.add(bowl);
+  // まわりの焦げた土の輪（草が焼けて土が見える）
+  const scorch = new THREE.Mesh(new THREE.RingGeometry(HOLE_R, R + 0.42, 64, 1), new THREE.MeshStandardMaterial({ ...earth, color: 0x5d564f, roughness: 1, transparent: true, depthWrite: false, alphaMap: ringFade(HOLE_R / (R + 0.42)) }));
+  scorch.rotation.x = -Math.PI / 2; scorch.position.y = 0.002; scorch.geometry.setAttribute('uv1', scorch.geometry.attributes.uv);
+  grp.add(scorch);
+  // 縁の石：大きな石を1周（隙間に小さな石）。半分ほど土に埋める
+  const mat = stoneMaterial(rockMat);
+  const shapes = [0, 1, 2, 3, 4, 5, 6, 7].map((k) => makeStone(k * 0.37 + 0.11));
   const place = [];
-  // 上の段は底から 4cm ほどだけ出す（縁を越えさせないのは見えない壁の役目。高く積むと炎が隠れ、火の近くの石が白く飛ぶ）
-  const layers = [[TRAY.y + 0.005, 0, 1.0], [TRAY.y - 0.08, 0.012, 1.08], [TRAY.y - 0.165, 0.024, 1.15], [TRAY.y - 0.25, 0.036, 1.22]];
-  layers.forEach(([y, out, big], li) => {
-    const ax = ox + out, az = oz + out, per = 4 * (ax + az), n = Math.round(per / 0.105);
-    for (let i = 0; i < n; i++) {
-      let d = ((i + (li % 2) * 0.5) / n) * per, x, z, yaw;
-      const sx = 2 * ax, sz = 2 * az;
-      if (d < sx) { x = -ax + d; z = az; yaw = 0; }
-      else if ((d -= sx) < sz) { x = ax; z = az - d; yaw = Math.PI / 2; }
-      else if ((d -= sz) < sx) { x = ax - d; z = -az; yaw = 0; }
-      else { d -= sx; x = -ax; z = -az + d; yaw = Math.PI / 2; }
-      const r = Math.random;
-      place.push({ k: Math.floor(r() * 6), x, y: y + (r() - 0.5) * 0.012, z, yaw: yaw + (r() - 0.5) * 0.6, s: [0.06 * big * (0.75 + r() * 0.5), 0.05 * big * (0.8 + r() * 0.35), 0.042 * big * (0.8 + r() * 0.4)] });
-    }
-  });
+  const n = 19;
+  for (let i = 0; i < n; i++) {
+    const a = (i + (Math.random() - 0.5) * 0.35) / n * Math.PI * 2, big = 0.07 + Math.random() ** 1.5 * 0.07;
+    place.push({ k: i % 8, r: R + 0.06 + big * 0.5 + Math.random() * 0.02, a, s: [big * (1 + Math.random() * 0.5), big * (0.7 + Math.random() * 0.4), big * (0.8 + Math.random() * 0.4)], y: big * (0.1 + Math.random() * 0.25) });
+    if (Math.random() < 0.6) { const sm = 0.035 + Math.random() * 0.025; place.push({ k: (i + 3) % 8, r: R + 0.14 + Math.random() * 0.05, a: a + Math.PI / n, s: [sm * 1.2, sm, sm], y: sm * 0.3 }); }
+  }
   const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
   shapes.forEach((g, k) => {
-    const list = place.filter((p) => p.k === k);
+    const list = place.filter((p) => p.k === k); if (!list.length) return;
     const im = new THREE.InstancedMesh(g, mat, list.length);
     list.forEach((p, i) => {
-      e.set((Math.random() - 0.5) * 0.25, p.yaw, (Math.random() - 0.5) * 0.25); q.setFromEuler(e);
-      m4.compose(new THREE.Vector3(p.x, p.y, p.z), q, new THREE.Vector3(...p.s));
+      e.set((Math.random() - 0.5) * 0.7, -p.a + (Math.random() - 0.5) * 1.2, (Math.random() - 0.5) * 0.7); q.setFromEuler(e);
+      m4.compose(new THREE.Vector3(Math.cos(p.a) * p.r, p.y, Math.sin(p.a) * p.r), q, new THREE.Vector3(...p.s));
       im.setMatrixAt(i, m4);
-      // 石ごとに色を少し変える（灰・茶・黒っぽい）
-      const v = 0.35 + Math.random() * 0.35, warm = Math.random() * 0.12;
-      im.setColorAt(i, new THREE.Color(v * (1 + warm * 0.3), v, v * (1 - warm)));
+      const v = 0.55 + Math.random() * 0.6, warm = Math.random() < 0.35 ? 0.25 + Math.random() * 0.2 : Math.random() * 0.08;   // 灰・黒っぽい・ときどき茶
+      im.setColorAt(i, new THREE.Color(v * (1 + warm * 0.4), v, v * (1 - warm)));
     });
     grp.add(im);
   });
-  grp.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+  grp.traverse((o) => { if (o.isMesh) { o.castShadow = o !== scorch; o.receiveShadow = true; } });
   return grp;
 }
-
-// 囲いの底の煤（すす）と焼け色
-function sootTexture() {
+// 焦げた土の輪の縁をぼかす（内側は濃く、外へ消える）
+function ringFade(inner) {   // inner：外の半径を1とした内側の半径（輪の模様は平面に貼られるので、丸いぼかし）
   const c = document.createElement('canvas'); c.width = c.height = 256;
-  const x = c.getContext('2d');
-  x.fillStyle = '#d8d6d2'; x.fillRect(0, 0, 256, 256);
-  for (let i = 0; i < 260; i++) {
-    const r = 10 + Math.random() * 60, px = 128 + (Math.random() - 0.5) * 200, py = 128 + (Math.random() - 0.5) * 160;
-    const gr = x.createRadialGradient(px, py, 0, px, py, r);
-    const col = Math.random() < 0.3 ? '120,95,70' : '40,36,32';
-    gr.addColorStop(0, `rgba(${col},0.12)`); gr.addColorStop(1, `rgba(${col},0)`);
-    x.fillStyle = gr; x.fillRect(px - r, py - r, r * 2, r * 2);
-  }
-  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
-  return t;
+  const x = c.getContext('2d'), gr = x.createRadialGradient(128, 128, 0, 128, 128, 128);
+  gr.addColorStop(0, '#fff'); gr.addColorStop(inner, '#fff'); gr.addColorStop(inner + (1 - inner) * 0.35, '#bbb'); gr.addColorStop(1, '#000');
+  x.fillStyle = gr; x.fillRect(0, 0, 256, 256);
+  return new THREE.CanvasTexture(c);
 }
 
 // 草：細い葉を何万本も（風で少し揺れる）
@@ -222,9 +232,9 @@ function makeGrass() {
   while (k < N) {
     const r = 0.12 + Math.random() ** 0.85 * 2.0, a = Math.random() * Math.PI * 2;
     const x = Math.cos(a) * r, z = Math.sin(a) * r * 1.1 - 0.4;
-    // 台の真下は熱で草が枯れて薄い（縁はぼかす）
-    const el = Math.hypot(x / 0.3, z / 0.24);
-    if (Math.random() < 1.2 - el * 0.8) continue;
+    // 炉と、そのまわりの焦げた土には生えない（縁はぼかす）
+    const rr = Math.hypot(x, z);
+    if (rr < HOLE_R + 0.12 || Math.random() < 1.4 - (rr - HOLE_R) * 2.2) continue;
     const h = 0.04 + Math.random() ** 2 * 0.12;
     e.set((Math.random() - 0.5) * 0.5, Math.random() * Math.PI * 2, (Math.random() - 0.5) * 0.5); q.setFromEuler(e);
     m.compose(new THREE.Vector3(x, 0, z), q, new THREE.Vector3(1 + Math.random(), h, 1));

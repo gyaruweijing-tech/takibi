@@ -5,11 +5,12 @@
 import { P } from './types.js';
 import { updatePositions, remaining, sliceLeft, cellLeft, idx } from './log.js';
 
-export const TRAY = { x: 0.21, z: 0.15, y: 0.30 };   // 焚き火台の内側（半分の幅）と底の高さ
-export const PIT = { wall: 0.35, stone: 0.07 };      // 石の囲い：見えない壁の高さ（底から）と、壁の外に並ぶ石の幅
+// 石囲炉：地面を10cm掘ったくぼみ。内側は直径76cmの円（熾火の床の計算は、その円が収まる四角で持つ）
+export const TRAY = { x: 0.38, z: 0.38, y: -0.10, r: 0.38 };   // 内側の半分の幅（四角）・底の高さ・円の半径
+export const PIT = { wall: 0.35 };                  // 見えない壁の高さ（底から）
 const B = 0.04;                                     // 炎の場の1マス
-const GX = 24, GZ = 18, GY = 32, X0 = -GX * B / 2, Z0 = -GZ * B / 2, Y0 = 0.22;
-const BED = { nx: 10, nz: 7 };
+const GX = 24, GZ = 22, GY = 32, X0 = -GX * B / 2, Z0 = -GZ * B / 2, Y0 = TRAY.y - 0.08;
+const BED = { nx: 19, nz: 19 };
 const soft = (v) => Math.min(1, Math.max(0, v));
 const K4 = (T) => (T + 273.15) ** 4;
 

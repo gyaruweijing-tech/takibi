@@ -1,5 +1,6 @@
 // カメラの癖：陽炎（炎の上の空気のゆらぎ）・光のにじみ（ブルーム）・露出の追従・粒子・周辺の暗さ
 import * as THREE from 'three';
+import { TRAY } from './burn/fire.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
@@ -80,7 +81,7 @@ export function createPost(renderer, scene, camera) {
       } else haze.uniforms.uK.value *= 0.95;
       // 明るい炎が大きいと少し絞る（ゆっくり）
       // 近づくほど画面の中が明るい所ばかりになるので、スマホのように絞る
-      const near = Math.min(1, Math.max(0.4, (camera.position.distanceTo(v.set(0, 0.35, 0)) / 1.3) ** 0.8));
+      const near = Math.min(1, Math.max(0.4, (camera.position.distanceTo(v.set(0, TRAY.y + 0.05, 0)) / 1.3) ** 0.8));
       const goal = 1.15 / (1 + light * 0.9) * near;
       exposure += (Math.max(0.35, goal) - exposure) * Math.min(1, dt * 0.8);
       renderer.toneMappingExposure = exposure;

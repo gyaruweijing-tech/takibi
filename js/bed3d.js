@@ -4,7 +4,7 @@ import { pbr } from './scene.js';
 import { TRAY, BED_DIM, bedBin, bedDepth } from './burn/fire.js';
 import { shared } from './logs3d.js';
 
-const NX = 48, NZ = 34;
+const NX = 64, NZ = 64;
 
 export function createBed(scene) {
   const W = TRAY.x * 2, D = TRAY.z * 2;
@@ -36,6 +36,8 @@ export function createBed(scene) {
         return pow(c, vec3(2.2)); }\n`;
     sh.vertexShader = head + 'attribute float aTemp; attribute float aCoal;\n' + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n vTemp = aTemp; vCoal = aCoal; vP = position;');
     sh.fragmentShader = head + sh.fragmentShader
+      .replace('#include <clipping_planes_fragment>', `#include <clipping_planes_fragment>
+        if (length(vP.xz) > ${TRAY.r.toFixed(3)}) discard;   // 囲いは円（床の計算は四角）`)
       .replace('#include <map_fragment>', `#include <map_fragment>
         // 炭のかたまり（黒）と、そのすき間の白い灰
         float lumps = vn(vP.xz * 70.0) * 0.6 + vn(vP.xz * 190.0) * 0.4;
@@ -70,7 +72,7 @@ export function createBed(scene) {
       const p = geo.attributes.position.array;
       for (let i = 0; i < n; i++) {
         const x = base[i * 3], z = base[i * 3 + 2];
-        const edge = Math.min(1, (TRAY.x - Math.abs(x)) / 0.03, (TRAY.z - Math.abs(z)) / 0.03);
+        const edge = Math.min(1, (TRAY.r - Math.hypot(x, z)) / 0.04);   // 円の縁に向かって薄く
         const depth = at((b) => bedDepth(bed, b), x, z);
         const coal = at((b) => bed.coal[b], x, z);
         p[i * 3 + 1] = Math.max(0, edge) * (Math.min(0.012, depth * 0.6) + lump[i] * Math.min(0.008, depth * 0.4 + 0.002));

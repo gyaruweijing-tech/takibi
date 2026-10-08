@@ -13,27 +13,34 @@ export async function createPhysics() {
     if (rot) b.setRotation(rot, false);
     return world.createCollider(RAPIER.ColliderDesc.cuboid(hx, hy, hz).setFriction(0.9), b);
   };
-  fixed(20, 0.05, 20, 0, -0.05, 0);                                      // 地面
-  fixed(TRAY.x + 0.01, 0.03, TRAY.z + 0.01, 0, TRAY.y + 0.009 - 0.03, 0);   // 囲いの底（灰の厚みぶん高く。すり抜けないよう下に厚く）
-  // 石の囲いの内側の、見えない壁（スイカゲームの容器と同じ。石より高く、薪が縁を越えない）。影の計算からは外す
-  const H = PIT.wall, walls = new Set();
-  for (const c of [
-    fixed(TRAY.x + 0.03, H / 2, 0.012, 0, TRAY.y + H / 2, TRAY.z + 0.021),
-    fixed(TRAY.x + 0.03, H / 2, 0.012, 0, TRAY.y + H / 2, -TRAY.z - 0.021),
-    fixed(0.012, H / 2, TRAY.z + 0.03, TRAY.x + 0.021, TRAY.y + H / 2, 0),
-    fixed(0.012, H / 2, TRAY.z + 0.03, -TRAY.x - 0.021, TRAY.y + H / 2, 0),
-  ]) walls.add(c.handle);
-  // 石の囲いそのもの（壁の外に並ぶ石の帯）。地面から石の上の高さまで
-  const S = PIT.stone, top = TRAY.y + 0.05, ox = TRAY.x + 0.033, oz = TRAY.z + 0.033;
-  fixed(ox + S, top / 2, S / 2, 0, top / 2, oz + S / 2);
-  fixed(ox + S, top / 2, S / 2, 0, top / 2, -oz - S / 2);
-  fixed(S / 2, top / 2, oz, ox + S / 2, top / 2, 0);
-  fixed(S / 2, top / 2, oz, -ox - S / 2, top / 2, 0);
+  // 地面：炉のくぼみの所だけ四角く空ける（くぼみの底は下の床）
+  const HOLE = TRAY.r + 0.09;
+  fixed(20, 0.05, (20 - HOLE) / 2, 0, -0.05, (20 + HOLE) / 2);
+  fixed(20, 0.05, (20 - HOLE) / 2, 0, -0.05, -(20 + HOLE) / 2);
+  fixed((20 - HOLE) / 2, 0.05, HOLE, (20 + HOLE) / 2, -0.05, 0);
+  fixed((20 - HOLE) / 2, 0.05, HOLE, -(20 + HOLE) / 2, -0.05, 0);
+  fixed(HOLE, 0.03, HOLE, 0, TRAY.y + 0.009 - 0.03, 0);   // くぼみの底（灰の厚みぶん高く。すり抜けないよう下に厚く）
+  // 円に沿って並べた見えない壁（スイカゲームの容器と同じ。薪が縁を越えない）。止まる所の計算からは外す
+  const H = PIT.wall, walls = new Set(), N = 20, ring = (n, r, hl, hy, hw, y, set) => {
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2, c = fixed(hl, hy, hw, Math.cos(a) * r, y, Math.sin(a) * r, { x: 0, y: Math.sin(-a / 2 + Math.PI / 4), z: 0, w: Math.cos(-a / 2 + Math.PI / 4) });
+      set?.add(c.handle);
+    }
+  };
+  ring(N, TRAY.r + 0.015, (TRAY.r + 0.03) * Math.tan(Math.PI / N) + 0.005, H / 2, 0.012, TRAY.y + H / 2, walls);
+  // 縁の石（半分埋まった大きな石の、おおよその形）。外で持っているとき、石の上に載って見える
+  ring(16, TRAY.r + 0.1, 0.085, 0.04, 0.07, 0.02);
   fixed(0.7, 0.25, 0.25, -0.55, 0.2, -1.25);                               // 岩（おおよそ）
 
   world.step();   // 一度進めないと、形を落とす計算（castShape）が何にも当たらない
 
   const bodies = new Map(); // log.id → { body, collider, scale, settle（残りコマ）, ld/ad（元のブレーキ） }
+
+  // 置いたときのブレーキ：その場に置く（true）は強めに、上から落とす（'drop'）は回転だけ（落ちる速さは変えない）
+  function applySettle(body, settle) {
+    if (settle === 'drop') body.setAngularDamping(6);
+    else if (settle) { body.setLinearDamping(4); body.setAngularDamping(10); }
+  }
 
   function colliderFor(log, s) {
     const pts = hullPoints(log);
@@ -58,7 +65,7 @@ export async function createPhysics() {
       const body = world.createRigidBody(desc);
       const collider = world.createCollider(colliderFor(log, 1), body);
       bodies.set(log.id, { body, collider, scale: 1, settle: settle ? 90 : 0, ld: 0.05, ad: log.t.kind === 'ball' ? 2 : 0.4 });
-      if (settle) { body.setLinearDamping(4); body.setAngularDamping(10); }
+      applySettle(body, settle);
       return body;
     },
     remove(log) {
@@ -80,11 +87,12 @@ export async function createPhysics() {
       for (const b of bodies.values()) if (b.settle > 0 && --b.settle === 0) { b.body.setLinearDamping(b.ld); b.body.setAngularDamping(b.ad); }
     },
     // 置いたあとどこで止まるかを先回りして計算する（世界を丸ごと写して、写しの中で置いて2秒進める）。add(…, settle) と同じ設定で
-    predict(log, x, y, z, yaw) {
+    predict(log, x, y, z, yaw, settle = true) {
       const w2 = RAPIER.World.restoreSnapshot(world.takeSnapshot());
       const b = w2.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(x, y, z).setRotation({ x: 0, y: Math.sin(yaw / 2), z: 0, w: Math.cos(yaw / 2) })
-        .setLinearDamping(4).setAngularDamping(10).setCcdEnabled(true));
+        .setLinearDamping(0.05).setAngularDamping(log.t.kind === 'ball' ? 2 : 0.4).setCcdEnabled(true));
       w2.createCollider(colliderFor(log, 1), b);
+      applySettle(b, settle);
       for (let i = 0; i < 120; i++) { if (i === 90) { b.setLinearDamping(0.05); b.setAngularDamping(log.t.kind === 'ball' ? 2 : 0.4); } w2.step(); }
       const t = b.translation(), r = b.rotation(), out = { p: [t.x, t.y, t.z], q: [r.x, r.y, r.z, r.w] };
       w2.free();
