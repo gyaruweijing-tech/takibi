@@ -1,6 +1,7 @@
 // 操作：棚で選ぶと、その材料がカーソルにくっついてくる。クリックでその場に置く。マッチ、火ばさみ、吹く、見回す
 // 持っている物の中心はいつもカーソルの光線の上にあり、高さは「そこに置いたら止まる高さ」（物理と同じ形を真下に落として求める）
 // → 画面の上で、カーソルと物がずれない。石の囲いの上では、囲いの内側に収まる所まで寄せる（見えない壁に当たる）
+// ホイールで持ち上げると、その高さから落とせる（スイカゲーム）。真下に線、落ちて止まる所に薄い影
 import * as THREE from 'three';
 import { makeLog } from './burn/log.js';
 import { LogView } from './logs3d.js';
@@ -8,7 +9,7 @@ import { TRAY, PIT } from './burn/fire.js';
 
 export function createInput({ canvas, camera, scene, physics, getLogByMesh, fireTargets, onPlace, onMiss, onMatch, onToolChange }) {
   const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
-  const view = { yaw: 0, pitch: 0.5, dist: 1.3, target: new THREE.Vector3(0, 0.36, 0) };
+  const view = { yaw: 0, pitch: 0.5, dist: 1.55, target: new THREE.Vector3(0, TRAY.y + 0.12, 0) };
   const st = { tool: null, yaw: Math.random() * 6.28, down: null, look: null, sel: null, move: null, blowKey: false, blowMic: 0, last: null };
 
   // 持っている物（材料ごとに1回だけ作る）：囲いの上では本物の見た目、外では半透明
@@ -47,39 +48,35 @@ export function createInput({ canvas, camera, scene, physics, getLogByMesh, fire
       if (d.y > -1e-3) return null;
       p = o.clone().addScaledVector(d, (TRAY.y - o.y) / d.y);
     }
-    if (Math.abs(p.x) > TRAY.x + 0.12 || Math.abs(p.z) > TRAY.z + 0.12) return null;
+    if (Math.hypot(p.x, p.z) > TRAY.r + 0.12) return null;
     return p;
   }
   // 持っている物の置き場所
-  const OX = TRAY.x + 0.033 + PIT.stone, OZ = TRAY.z + 0.033 + PIT.stone;   // 石の囲いの外周
-  const foot = (yaw, L, w) => { const c = Math.abs(Math.cos(yaw)), s = Math.abs(Math.sin(yaw)); return [c * L / 2 + s * w / 2, s * L / 2 + c * w / 2]; };
-  // 長い薪が囲いの奥行きに入らない向きなら、入る所まで長い辺の向きへ回す（最小限）
-  function fitYaw(yaw, L, w) {
-    if (foot(yaw, L, w)[1] <= TRAY.z - 0.004) return yaw;
-    const to = Math.round(yaw / Math.PI) * Math.PI;
-    let a = to, b = yaw;
-    for (let i = 0; i < 12; i++) { const m = (a + b) / 2; if (foot(m, L, w)[1] <= TRAY.z - 0.004) a = m; else b = m; }
-    return a;
+  const AIM = TRAY.r + 0.17;   // カーソルがここより内側を指していれば「囲いを狙っている」（縁の石の上を含む）
+  // 薪の四隅が円の内側に収まるまで、中心を円の中心へ寄せる
+  function fitIn(x, z, yaw, L, w) {
+    const c = Math.cos(yaw), s = Math.sin(yaw), R = TRAY.r - 0.004;
+    const far = (k) => Math.max(...[[1, 1], [1, -1], [-1, 1], [-1, -1]].map(([a, b]) => Math.hypot(k * x + c * a * L / 2 + s * b * w / 2, k * z - s * a * L / 2 + c * b * w / 2)));
+    if (far(1) <= R) return [x, z];
+    let lo = 0, hi = 1;
+    for (let i = 0; i < 14; i++) { const m = (lo + hi) / 2; if (far(m) <= R) lo = m; else hi = m; }
+    return [x * lo, z * lo];
   }
   function poseAt(t, log, yaw0, inside) {
     const o = ray.ray.origin, d = ray.ray.direction;
     let x = o.x + d.x * t, z = o.z + d.z * t, yaw = yaw0;
-    if (inside) {
-      yaw = fitYaw(yaw0, log.L, log.w);
-      const [ex, ez] = foot(yaw, log.L, log.w), mx = Math.max(0, TRAY.x - 0.004 - ex), mz = Math.max(0, TRAY.z - 0.004 - ez);
-      x = clamp(x, -mx, mx); z = clamp(z, -mz, mz);
-    }
+    if (inside) [x, z] = fitIn(x, z, yaw, log.L, log.w);
     const y = physics.restY(log, x, z, yaw) ?? log.h / 2;
     return { x, y, z, yaw };
   }
   // カーソルの光線をたどって、「光線の高さ ＝ そこに置いたら止まる高さ」になる所を二分法で探す
-  function holdPose(log, yaw) {
+  function holdPose(log, yaw, lift = 0) {
     const o = ray.ray.origin, d = ray.ray.direction;
     const t1 = d.y < -1e-3 ? Math.min(4, -o.y / d.y) : 4;
     // 囲いを狙っているか：カーソルが囲いの底の高さで指す所で決める（長い薪の先が手前の石にかかっても、囲いの中に入れる）
-    const tf = d.y < -1e-3 ? (TRAY.y - o.y) / d.y : -1;
-    const inside = tf > 0 && Math.abs(o.x + d.x * tf) < OX && Math.abs(o.z + d.z * tf) < OZ;
-    const f = (t) => o.y + d.y * t - poseAt(t, log, yaw, inside).y;
+    const tf = d.y < -1e-3 ? (0 - o.y) / d.y : -1;
+    const inside = tf > 0 && Math.hypot(o.x + d.x * tf, o.z + d.z * tf) < AIM;
+    const f = (t) => o.y + d.y * t - poseAt(t, log, yaw, inside).y - lift;
     // 手前から順に見て、最初に「置いたら止まる高さ」を下回った区間を二分法で詰める
     let a = 0.05, b = t1;
     for (let i = 1; i <= 24; i++) { const m = a + (t1 - 0.05) / 24; if (f(m) <= 0) { b = m; break; } a = m; }
@@ -87,10 +84,14 @@ export function createInput({ canvas, camera, scene, physics, getLogByMesh, fire
     // 手の位置（いつもカーソルの光線の上）と、置かれる所。壁で止まったときだけ2つが離れる
     const P = poseAt(b, log, yaw, inside); P.inside = inside;
     P.hand = new THREE.Vector3(o.x + d.x * b, o.y + d.y * b, o.z + d.z * b);
-    P.apart = P.hand.distanceTo(new THREE.Vector3(P.x, P.y, P.z)) > 0.015;
+    P.lift = lift;
+    P.apart = P.hand.distanceTo(new THREE.Vector3(P.x, P.y + lift, P.z)) > 0.015 || lift > 0.015;
     return P;
   }
-  const hold = { pose: null, key: '', since: 0, pred: null, predKey: '' };
+  const hold = { pose: null, key: '', since: 0, pred: null, predKey: '', lift: 0 };
+  // 落ちる線（手から、落ちて止まる所まで）
+  const dropLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]), new THREE.LineDashedMaterial({ color: 0xffe8c8, transparent: true, opacity: 0.5, dashSize: 0.012, gapSize: 0.01, depthTest: false }));
+  dropLine.visible = false; dropLine.raycast = () => {}; dropLine.renderOrder = 13; scene.add(dropLine);
   const pickLog = () => {
     for (const h of ray.intersectObjects(fireTargets(), true)) { const lv = getLogByMesh(h.object); if (lv) return lv.log; }
     return null;
@@ -129,7 +130,10 @@ export function createInput({ canvas, camera, scene, physics, getLogByMesh, fire
   canvas.addEventListener('pointercancel', up);
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
-    if (st.tool && st.tool !== 'match' && st.tool !== 'tongs') st.yaw += e.deltaY * 0.004;   // 向きを回す
+    if (st.tool && st.tool !== 'match' && st.tool !== 'tongs') {
+      if (e.shiftKey) st.yaw += (e.deltaY || e.deltaX) * 0.004;                      // Shift＋ホイール：向きを回す
+      else hold.lift = clamp(hold.lift - e.deltaY * 0.0006, 0, 0.4);                 // ホイール：持ち上げる高さ（0〜40cm）
+    }
     else view.dist = clamp(view.dist + e.deltaY * 0.0012, 0.55, 2.4);
   }, { passive: false });
   addEventListener('keydown', (e) => {
@@ -152,7 +156,8 @@ export function createInput({ canvas, camera, scene, physics, getLogByMesh, fire
     const P = hold.pose;
     if (!P) return;
     if (!P.inside) { onMiss?.(); return; }
-    onPlace(k, new THREE.Vector3(P.x, P.y + 0.003, P.z), new THREE.Quaternion().setFromEuler(new THREE.Euler(0, P.yaw, 0)));
+    const drop = P.lift > 0.015;
+    onPlace(k, new THREE.Vector3(P.x, P.y + (drop ? P.lift : 0.003), P.z), new THREE.Quaternion().setFromEuler(new THREE.Euler(0, P.yaw, 0)), drop);
     st.yaw += (Math.random() - 0.5) * 0.6;   // 次の1本は少し向きを変えておく
   }
 
@@ -172,26 +177,32 @@ export function createInput({ canvas, camera, scene, physics, getLogByMesh, fire
         if (!log) { const p = placePoint(); g.visible = !!p; if (p) g.position.set(p.x, p.y + 0.012, p.z); }
         else {
           // 囲いの上：手に持った本物＋（離れたときだけ）置かれる所に薄い影。外：半透明で手についてくるだけ（置けない）
-          const P = hold.pose = holdPose(log, st.yaw), dim = g.userData.dim;
+          const P = hold.pose = holdPose(log, st.yaw, hold.lift), dim = g.userData.dim;
           if (P.apart) g.position.copy(P.hand); else g.position.set(P.x, P.y + 0.01, P.z);
           g.quaternion.setFromEuler(new THREE.Euler(0, P.yaw, 0));
-          g.visible = P.inside; dim.visible = !P.inside;
+          g.visible = P.inside; dim.visible = !P.inside; dropLine.visible = false;
           if (!P.inside) { dim.position.copy(P.hand); dim.quaternion.copy(g.quaternion); }
           else {
             // 止まる所の先回り：カーソルが 0.08 秒止まったら1回だけ計算（動かしている間は計算しない＝カクつかない）
-            const key = `${st.tool}|${P.x.toFixed(3)}|${P.z.toFixed(3)}|${P.y.toFixed(3)}|${P.yaw.toFixed(2)}|${fireTargets().length}`;
+            const drop = P.lift > 0.015;
+            const key = `${st.tool}|${P.x.toFixed(3)}|${P.z.toFixed(3)}|${P.y.toFixed(3)}|${P.yaw.toFixed(2)}|${P.lift.toFixed(3)}|${fireTargets().length}`;
             const now = performance.now();
             if (key !== hold.key) { hold.key = key; hold.since = now; }
-            else if (hold.predKey !== key && now - hold.since > 80) { hold.pred = physics.predict(log, P.x, P.y + 0.003, P.z, P.yaw); hold.predKey = key; }
-            // 止まる所が、手の位置から 1.5cm 以上か 10° 以上ずれるときだけ、そこに薄い影を出す
+            else if (hold.predKey !== key && now - hold.since > 80) { hold.pred = physics.predict(log, P.x, P.y + (drop ? P.lift : 0.003), P.z, P.yaw, drop ? 'drop' : true); hold.predKey = key; }
+            // 止まる所：持ち上げているとき・壁で止まったとき・手の位置から 1.5cm／10° 以上ずれるときに薄い影
+            let gp = null, gq = g.quaternion;
             if (hold.predKey === key && hold.pred) {
               const q = new THREE.Quaternion().fromArray(hold.pred.q);
               const far = Math.hypot(hold.pred.p[0] - P.x, hold.pred.p[1] - P.y, hold.pred.p[2] - P.z) > 0.015 || q.angleTo(g.quaternion) > 0.17;
-              if (far || P.apart) { dim.visible = true; dim.position.fromArray(hold.pred.p); dim.quaternion.copy(q); }
-            } else if (P.apart) { dim.visible = true; dim.position.set(P.x, P.y, P.z); dim.quaternion.copy(g.quaternion); }
+              if (far || P.apart) { gp = new THREE.Vector3().fromArray(hold.pred.p); gq = q; }
+            } else if (P.apart) gp = new THREE.Vector3(P.x, P.y, P.z);
+            if (gp) {
+              dim.visible = true; dim.position.copy(gp); dim.quaternion.copy(gq);
+              if (drop) { dropLine.visible = true; dropLine.geometry.setFromPoints([g.position, gp]); dropLine.computeLineDistances(); }
+            }
           }
         }
-      }
+      } else dropLine.visible = false;
       // 火ばさみ：選んだ薪の上に輪、動かしている間は押して運ぶ
       marker.visible = !!st.sel;
       if (st.sel) { const p = st.sel.pose.p; marker.position.set(p[0], p[1] + 0.06, p[2]); }
