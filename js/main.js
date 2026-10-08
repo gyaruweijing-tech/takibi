@@ -37,7 +37,16 @@ const smoke = await createSmoke(scene);
 const bedView = createBed(scene);
 const post = createPost(renderer, scene, camera);
 for (const m of [flames.mesh]) m.userData.noPick = true;
-buildPiles(scene);
+const piles = buildPiles(scene);
+// たいまつの炎：焚き火と同じ撮影した炎を小さく1本。明かりの強さ・色はランタンと同じで、炎の明るさに合わせて揺らす
+const torchFlames = await createFlames(scene);
+const torchCol = [{ x: piles.torch.head.x, y: piles.torch.head.y - 0.05, z: piles.torch.head.z, Q: 0.5, Lf: 0.14 }];   // 映像の炎は下が空いているので、根元を頭より下げる
+let torchAvg = 0;
+function lightTorch(dt) {
+  torchFlames.update(torchCol, dt);
+  torchAvg += (torchFlames.light - torchAvg) * Math.min(1, dt * 0.8);
+  piles.torch.lamp.intensity = 0.45 * (torchAvg > 1e-6 ? Math.min(1.4, Math.max(0.6, torchFlames.light / torchAvg)) : 1);
+}
 const haptics = createHaptics();
 let audio = null;
 
@@ -66,11 +75,11 @@ const ui = createUI({
 const input = createInput({
   canvas, camera, scene, physics, getLogByMesh: byMesh,
   fireTargets: () => [bedView.mesh, stand, ...[...views.values()].map((v) => v.mesh)],
-  onPlace(key, p, q) {
+  onPlace(key, p, q, drop) {
     if (fire.logs.length >= 40) { toast('台がいっぱい'); return; }
     const log = makeLog(key);
     log.pose = { p: [p.x, p.y, p.z], q: q.toArray() };
-    addLog(log, undefined, undefined, true);
+    addLog(log, undefined, undefined, drop ? 'drop' : true);
   },
   onMiss: () => toast('石の囲いの中に置こう'),
   onMatch(p) {
@@ -91,7 +100,8 @@ if (DEBUG) window.__t.input = input;
 
 // 燃えている焚き火から始める：熾火を敷き、薪を組んで、1分ぶん先に燃やしておく
 function prebuilt() {
-  for (let b = 0; b < fire.bed.coal.length; b++) { fire.bed.coal[b] = 0.0035 + Math.random() * 0.002; fire.bed.T[b] = 620 + Math.random() * 120; fire.bed.ash[b] = 0.006; }
+  // 熾火は真ん中の直径40cmほど（囲いは直径76cm。外側は灰だけ）
+  for (let b = 0; b < fire.bed.coal.length; b++) { const [x, z] = bedXZ(b); if (Math.hypot(x, z) > 0.2) continue; fire.bed.coal[b] = 0.0035 + Math.random() * 0.002; fire.bed.T[b] = 620 + Math.random() * 120; fire.bed.ash[b] = 0.006; }
   const put = (key, x, y, z, yaw) => { const l = makeLog(key); l.pose = { p: [x, y, z], q: new THREE.Quaternion().setFromEuler(new THREE.Euler(0, yaw, 0)).toArray() }; addLog(l); };
   put('oak', 0, TRAY.y + 0.045, -0.04, 0.15);
   put('pine', 0.02, TRAY.y + 0.045, 0.06, -0.1);
@@ -102,7 +112,7 @@ function prebuilt() {
 }
 
 // 保存と再開（離れていた時間も、熾火はゆっくり燃え続ける）
-const SAVE = 'takibi-save-v1';
+const SAVE = 'takibi-save-v2';   // v2：石囲炉（底の高さが変わったので v1 は読まない）
 function save() {
   try {
     const b = fire.bed;
@@ -207,6 +217,7 @@ function frame(now) {
     saveT += dt; if (saveT > 10) { saveT = 0; save(); }
   }
   flames.update(fire.columns, dt);
+  lightTorch(dt);
   lightFire(dt);
   sparks.update(dt, updraft, fire.wind);
   smoke.update(dt, camera, lightState, updraft, fire.wind);
@@ -225,6 +236,7 @@ function autoScale() {
   if (slow >= 2) { post.setScale(post.scale - 0.1); slow = 0; }
   if (slow <= -4) { post.setScale(post.scale + 0.1); slow = 0; }
 }
+if (DEBUG) window.__t.frame = (n = 1, dtMs = 16.7) => { for (let i = 0; i < n; i++) frame(last + dtMs); };   // 検証用：画面が隠れて止まっていても、コマを進める
 const p0below = (l) => l.pose.p[1] < -1;
 function hotBed() { let m = 0; for (const T of fire.bed.T) m = Math.max(m, T); return Math.min(1, Math.max(0, (m - 350) / 400)); }
 
@@ -297,7 +309,7 @@ if (hasSave) { const b3 = document.createElement('button'); b3.textContent = '�
 go.onclick = () => begin(hasSave ? 'load' : 'new');
 b2.onclick = () => begin('lit');
 function begin(mode) {
-  if (!audio) { audio = createAudio(); audio.resume(); }
+  if (!audio) { audio = createAudio(); audio.resume(); if (DEBUG || new URLSearchParams(location.search).has('mute')) { audio.muted = true; audio.setMuted(true); } }   // 開発中（?debug・?mute）は音なしで始める。M で出せる
   if (mode === 'load') load();
   else if (mode === 'lit') prebuilt();
   else toast('新聞紙を置き、小枝をのせ、マッチで火をつける', 6000);
