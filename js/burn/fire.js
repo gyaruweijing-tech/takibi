@@ -6,6 +6,7 @@ import { P } from './types.js';
 import { updatePositions, remaining, sliceLeft, cellLeft, idx } from './log.js';
 
 export const TRAY = { x: 0.21, z: 0.15, y: 0.30 };   // 焚き火台の内側（半分の幅）と底の高さ
+export const PIT = { wall: 0.35, stone: 0.07 };      // 石の囲い：見えない壁の高さ（底から）と、壁の外に並ぶ石の幅
 const B = 0.04;                                     // 炎の場の1マス
 const GX = 24, GZ = 18, GY = 32, X0 = -GX * B / 2, Z0 = -GZ * B / 2, Y0 = 0.22;
 const BED = { nx: 10, nz: 7 };

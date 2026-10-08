@@ -1,7 +1,8 @@
-// 場面：草の上の焚き火台、後ろに岩、奥に木。座って見下ろす目線（本人の写真の構図）
+// 場面：草の上の石組みの炉（焚き火台）、後ろに岩、奥に木。座って見下ろす目線（本人の写真の構図）
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { TRAY } from './burn/fire.js';
+import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
+import { TRAY, PIT } from './burn/fire.js';
 
 const TEX = 'assets/polyhaven/textures/';
 const loader = new THREE.TextureLoader();
@@ -73,9 +74,6 @@ export async function buildScene(renderer) {
   scene.add(ground);
   const grass = makeGrass(); grass.name = 'grass'; scene.add(grass);
 
-  const stand = makeStand();
-  scene.add(stand);
-
   // 後ろの岩（本人の写真では横長の岩）
   const gl = new GLTFLoader();
   const rockScene = (await loadGltf(gl, 'assets/polyhaven/models/namaqualand_boulder_05/', 'namaqualand_boulder_05_1k.gltf')).scene;
@@ -87,6 +85,9 @@ export async function buildScene(renderer) {
   rockScene.name = 'rock';
   rockScene.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
   scene.add(rockScene);
+  let rockMat = null; rockScene.traverse((o) => { if (o.isMesh && !rockMat) rockMat = o.material; });
+  const stand = makeHearth(rockMat);
+  scene.add(stand);
 
   // 奥の木（幹だけ。上は闇に消える）
   const bark = pbr('bark_brown_02', 1);
@@ -115,40 +116,75 @@ async function loadGltf(gl, base, file) {
   return gl.parseAsync(JSON.stringify(j), base);
 }
 
-// 焚き火台：ステンレスの四角いトレー＋X字の脚
-function makeStand() {
-  const grp = new THREE.Group();
-  const steel = new THREE.MeshStandardMaterial({ color: 0xb9b6b0, metalness: 1, roughness: 0.38 });
+// 石組みの炉：地面から石を4段積み、上の段の内側が囲い（本人の参考画像の、石で囲んだ焚き火）
+// 石は低い多面体を少しずつ歪めた形を6種類。色は後ろの岩と同じ素材。当たり判定は physics.js の石の帯と見えない壁
+function makeHearth(rockMat) {
+  const grp = new THREE.Group(); grp.name = 'hearth';
+  const ox = TRAY.x + 0.033 + PIT.stone / 2, oz = TRAY.z + 0.033 + PIT.stone / 2;   // 石の帯の中心線（半分の幅）
+  // 中身の土（石のすき間から草が見えないように）と、囲いの底
+  const earth = pbr('forrest_ground_03', 1);
+  const core = new THREE.Mesh(new THREE.BoxGeometry(ox * 2, TRAY.y - 0.004, oz * 2), new THREE.MeshStandardMaterial({ ...earth, color: 0x6a5f55, roughness: 1 }));
+  core.geometry.setAttribute('uv1', core.geometry.attributes.uv);
+  core.position.y = (TRAY.y - 0.004) / 2;
+  grp.add(core);
   const soot = sootTexture();
-  const trayMat = new THREE.MeshStandardMaterial({ color: 0xb9b6b0, metalness: 1, roughness: 0.45, map: soot, roughnessMap: soot });
-  const W = TRAY.x * 2 + 0.02, D = TRAY.z * 2 + 0.02, rim = 0.035, t = 0.002;
-  const floor = new THREE.Mesh(new THREE.BoxGeometry(W, t, D), trayMat);
-  floor.position.y = TRAY.y - t / 2;
+  const floor = new THREE.Mesh(new THREE.BoxGeometry(TRAY.x * 2 + 0.07, 0.004, TRAY.z * 2 + 0.07), new THREE.MeshStandardMaterial({ color: 0x3a342f, roughness: 1, map: soot }));
+  floor.position.y = TRAY.y - 0.002;
   grp.add(floor);
-  // 縁は少し外に開く
-  for (const [w, d, x, z, rx, rz] of [[W, t, 0, D / 2, -0.25, 0], [W, t, 0, -D / 2, 0.25, 0], [t, D, W / 2, 0, 0, 0.25], [t, D, -W / 2, 0, 0, -0.25]]) {
-    const m = new THREE.Mesh(new THREE.BoxGeometry(w, rim, d), trayMat);
-    m.position.set(x, TRAY.y + rim / 2 - 0.002, z); m.rotation.set(rx, 0, rz);
-    grp.add(m);
+  // 石の形（6種類）
+  const shapes = [];
+  for (let k = 0; k < 6; k++) {
+    const g = mergeVertices(new THREE.IcosahedronGeometry(1, 3).deleteAttribute('normal').deleteAttribute('uv')), p = g.attributes.position, seed = k * 1.7 + 0.3;
+    for (let i = 0; i < p.count; i++) {
+      const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+      const n = 1 + 0.16 * Math.sin(x * 3.1 + seed) * Math.sin(y * 2.7 + seed * 2) + 0.1 * Math.sin(z * 4.3 + seed * 3);
+      p.setXYZ(i, x * n, Math.max(-0.75, y * n), z * n);   // 下は平らに（積みやすい形）
+    }
+    g.computeVertexNormals();
+    // 球の写し方で模様を貼る（向きでつながる）
+    const uv = new Float32Array(p.count * 2);
+    for (let i = 0; i < p.count; i++) { const x = p.getX(i), y = p.getY(i), z = p.getZ(i); uv[i * 2] = Math.atan2(z, x) / (Math.PI * 2) + 0.5; uv[i * 2 + 1] = y * 0.5 + 0.5; }
+    g.setAttribute('uv', new THREE.BufferAttribute(uv, 2)); g.setAttribute('uv1', g.attributes.uv);
+    shapes.push(g);
   }
-  // 脚：X 字に交差する細い棒
-  const leg = (a, b) => {
-    const v = new THREE.Vector3().subVectors(b, a), len = v.length();
-    const m = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.004, len, 8), steel);
-    m.position.copy(a).addScaledVector(v, 0.5);
-    m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), v.normalize());
-    grp.add(m);
-  };
-  const y = TRAY.y - 0.01, fx = TRAY.x * 0.85, fz = TRAY.z * 0.85;
-  leg(new THREE.Vector3(-fx, y, fz), new THREE.Vector3(fx * 0.9, 0, -fz * 0.6));
-  leg(new THREE.Vector3(fx, y, fz), new THREE.Vector3(-fx * 0.9, 0, -fz * 0.6));
-  leg(new THREE.Vector3(-fx, y, -fz), new THREE.Vector3(fx * 0.9, 0, fz * 0.6));
-  leg(new THREE.Vector3(fx, y, -fz), new THREE.Vector3(-fx * 0.9, 0, fz * 0.6));
+  const mat = rockMat ? rockMat.clone() : new THREE.MeshStandardMaterial({ roughness: 0.95 });
+  mat.color = new THREE.Color(0x8a8580); mat.roughness = 1; mat.metalness = 0;
+  // 角を丸めた長方形の上に、段ごとに少しずらして並べる（下の段ほど外へ・大きく）
+  const place = [];
+  // 上の段は底から 4cm ほどだけ出す（縁を越えさせないのは見えない壁の役目。高く積むと炎が隠れ、火の近くの石が白く飛ぶ）
+  const layers = [[TRAY.y + 0.005, 0, 1.0], [TRAY.y - 0.08, 0.012, 1.08], [TRAY.y - 0.165, 0.024, 1.15], [TRAY.y - 0.25, 0.036, 1.22]];
+  layers.forEach(([y, out, big], li) => {
+    const ax = ox + out, az = oz + out, per = 4 * (ax + az), n = Math.round(per / 0.105);
+    for (let i = 0; i < n; i++) {
+      let d = ((i + (li % 2) * 0.5) / n) * per, x, z, yaw;
+      const sx = 2 * ax, sz = 2 * az;
+      if (d < sx) { x = -ax + d; z = az; yaw = 0; }
+      else if ((d -= sx) < sz) { x = ax; z = az - d; yaw = Math.PI / 2; }
+      else if ((d -= sz) < sx) { x = ax - d; z = -az; yaw = 0; }
+      else { d -= sx; x = -ax; z = -az + d; yaw = Math.PI / 2; }
+      const r = Math.random;
+      place.push({ k: Math.floor(r() * 6), x, y: y + (r() - 0.5) * 0.012, z, yaw: yaw + (r() - 0.5) * 0.6, s: [0.06 * big * (0.75 + r() * 0.5), 0.05 * big * (0.8 + r() * 0.35), 0.042 * big * (0.8 + r() * 0.4)] });
+    }
+  });
+  const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
+  shapes.forEach((g, k) => {
+    const list = place.filter((p) => p.k === k);
+    const im = new THREE.InstancedMesh(g, mat, list.length);
+    list.forEach((p, i) => {
+      e.set((Math.random() - 0.5) * 0.25, p.yaw, (Math.random() - 0.5) * 0.25); q.setFromEuler(e);
+      m4.compose(new THREE.Vector3(p.x, p.y, p.z), q, new THREE.Vector3(...p.s));
+      im.setMatrixAt(i, m4);
+      // 石ごとに色を少し変える（灰・茶・黒っぽい）
+      const v = 0.35 + Math.random() * 0.35, warm = Math.random() * 0.12;
+      im.setColorAt(i, new THREE.Color(v * (1 + warm * 0.3), v, v * (1 - warm)));
+    });
+    grp.add(im);
+  });
   grp.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
   return grp;
 }
 
-// 使い込んだトレーの煤（すす）と焼け色
+// 囲いの底の煤（すす）と焼け色
 function sootTexture() {
   const c = document.createElement('canvas'); c.width = c.height = 256;
   const x = c.getContext('2d');
