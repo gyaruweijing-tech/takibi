@@ -154,6 +154,14 @@ export function createInput({ canvas, camera, scene, physics, getLogByMesh, fire
 
   return {
     st, view, setTool, hold, ghosts,
+    // 道具（マッチ・火ばさみ）の先を置く所：火の中の物・床に当たればそこ、外れたら地面、それも無ければ目の前
+    toolPoint() {
+      if (!st.last || st.look) return null;
+      if (st.move) { const p = st.move.log.pose.p; return new THREE.Vector3(p[0], p[1] + 0.02, p[2]); }
+      const p = placePoint(); if (p) return p;
+      const o = ray.ray.origin, d = ray.ray.direction;
+      return d.y < -1e-3 ? o.clone().addScaledVector(d, -o.y / d.y) : o.clone().addScaledVector(d, 1.2);
+    },
     get blowing() { return st.blowKey || st.blowMic > 0.5; },
     update(dt) {
       const c = Math.cos(view.pitch), s = Math.sin(view.pitch);
@@ -165,7 +173,7 @@ export function createInput({ canvas, camera, scene, physics, getLogByMesh, fire
       hold.pose = null;
       if (st.tool && st.tool !== 'tongs' && st.last && !st.look) {
         const g = ghostFor(st.tool), log = g.userData.log;
-        if (!log) { const p = placePoint(); g.visible = !!p; if (p) g.position.set(p.x, p.y + 0.012, p.z); }
+        if (!log) g.visible = false;   // マッチは tools3d.js の本物の見た目で出す
         else {
           // 囲いの上：本物を手の位置（壁の内側に寄せる・床や積んだ物より下には行かない）。外：半透明で手についてくるだけ（置けない）
           const P = hold.pose = holdPose(log, st.yaw), dim = g.userData.dim;
@@ -186,9 +194,9 @@ export function createInput({ canvas, camera, scene, physics, getLogByMesh, fire
           }
         }
       } else blob.visible = false;
-      // 火ばさみ：選んだ薪の上に輪、動かしている間は押して運ぶ
-      marker.visible = !!st.sel;
-      if (st.sel) { const p = st.sel.pose.p; marker.position.set(p[0], p[1] + 0.06, p[2]); }
+      // 火ばさみ：動かしている間は押して運ぶ（選んだ印の輪はやめた：本人「天使の輪っかでは分からない」。つかむと火ばさみの先が閉じる）
+      marker.visible = false;
+      canvas.style.cursor = st.tool === 'match' || st.tool === 'tongs' ? 'none' : '';   // 道具の先がカーソルの代わり
       if (st.move) {
         const m = st.move, body = physics.body(m.log);
         m.t += dt;

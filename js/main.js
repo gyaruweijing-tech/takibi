@@ -15,6 +15,7 @@ import { createHaptics } from './haptics.js';
 import { createInput, startMic } from './input.js';
 import { buildPiles } from './piles.js';
 import { createUI } from './ui.js';
+import { createTools } from './tools3d.js';
 
 const DEBUG = new URLSearchParams(location.search).has('debug') || new URLSearchParams(location.search).has('bench');
 const bench = {};
@@ -97,6 +98,7 @@ function resetWorld() {
 }
 
 if (DEBUG) window.__t.input = input;
+const tools = createTools(scene, camera);
 
 // 燃えている焚き火から始める：熾火を敷き、薪を組んで、1分ぶん先に燃やしておく
 function prebuilt() {
@@ -180,6 +182,8 @@ function frame(now) {
   frames++; fpsT += dt; if (fpsT > 0.5) { fps = frames / fpsT; frames = 0; fpsT = 0; autoScale(); }
   shared.uTime.value = now / 1000;
   input.update(dt);
+  tools.update(input.st.tool, input.toolPoint(), !!(input.st.sel || input.st.move), dt);
+  tools.updateMatches(fire.matches);
   if (started) {
     acc += dt;
     let n = 0;
