@@ -46,9 +46,9 @@ const views = new Map();
 if (DEBUG) window.__t = { renderer, scene, camera, physics, get fire() { return fire; }, views, flames, post };
 const byMesh = (o) => { while (o) { if (o.userData.logView) return o.userData.logView; o = o.parent; } return null; };
 
-function addLog(log, vel, spin) {
+function addLog(log, vel, spin, settle) {
   fire.logs.push(log);
-  physics.add(log, vel, spin);
+  physics.add(log, vel, spin, settle);
   const v = new LogView(log); views.set(log.id, v); scene.add(v.mesh); v.update();
   return log;
 }
@@ -70,8 +70,9 @@ const input = createInput({
     if (fire.logs.length >= 40) { toast('台がいっぱい'); return; }
     const log = makeLog(key);
     log.pose = { p: [p.x, p.y, p.z], q: q.toArray() };
-    addLog(log);
+    addLog(log, undefined, undefined, true);
   },
+  onMiss: () => toast('石の囲いの中に置こう'),
   onMatch(p) {
     fire.matches.push({ x: p.x, y: p.y, z: p.z, life: 18, power: 1 });
     audio?.strike(panOf([p.x, p.y, p.z]));
@@ -153,7 +154,15 @@ function updraft(x, y, z) {
 
 // ── ループ
 let last = performance.now(), acc = 0, burnAcc = 0, speed = 1, saveT = 0, started = false;
-const prevVel = new Map();
+const prevVel = new Map(), prevPose = new Map();
+function keepPrev() {
+  for (const l of fire.logs) {
+    const b = physics.body(l); if (!b) continue;
+    let pr = prevPose.get(l.id); if (!pr) prevPose.set(l.id, (pr = { p: new THREE.Vector3(), q: new THREE.Quaternion() }));
+    const t = b.translation(), r = b.rotation(); pr.p.set(t.x, t.y, t.z); pr.q.set(r.x, r.y, r.z, r.w);
+  }
+  if (prevPose.size > fire.logs.length + 20) for (const id of prevPose.keys()) if (!views.has(id)) prevPose.delete(id);
+}
 let blow = 0, fps = 60, frames = 0, fpsT = 0;
 function frame(now) {
   requestAnimationFrame(frame);
@@ -164,12 +173,18 @@ function frame(now) {
   if (started) {
     acc += dt;
     let n = 0;
-    while (acc >= 1 / 60 && n++ < 3) { physics.step(); acc -= 1 / 60; }
+    while (acc >= 1 / 60 && n++ < 3) { keepPrev(); physics.step(); acc -= 1 / 60; }
     if (n >= 3) acc = 0;
+    // 物理は1/60秒ごと、画面はコマごと：ひとつ前と今の姿勢を、余った時間の割合で混ぜて描く（Fix Your Timestep）
+    const alpha = Math.min(1, acc * 60);
     for (const l of fire.logs) {
       physics.syncPose(l);
       const v = views.get(l.id), b = physics.body(l);
-      if (v && b) { const t = b.translation(), r = b.rotation(); v.mesh.position.set(t.x, t.y, t.z); v.mesh.quaternion.set(r.x, r.y, r.z, r.w); }
+      if (v && b) {
+        const t = b.translation(), r = b.rotation(), pr = prevPose.get(l.id);
+        v.mesh.position.set(t.x, t.y, t.z); v.mesh.quaternion.set(r.x, r.y, r.z, r.w);
+        if (pr) { v.mesh.position.lerpVectors(pr.p, v.mesh.position, alpha); v.mesh.quaternion.slerpQuaternions(pr.q, v.mesh.quaternion, alpha); }
+      }
       // ぶつかった音（速さが急に変わった）
       if (b) {
         const lv = b.linvel(), pv = prevVel.get(l.id);
