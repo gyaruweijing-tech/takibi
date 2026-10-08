@@ -86,6 +86,11 @@ export function stepFire(fire, dt, rnd = Math.random) {
       let q = 0, pilot = false;
       if (A > 0) {
         q += A * (Fc * P.qFlame + P.hConv * (Tgas - T));
+        // まわりの炎からの放射（前のステップの炎の柱。炎の高さの1/3を中心とする点の熱源）。炎の中は上の qFlame で数えているので足しすぎないよう上限
+        let qr = 0;
+        for (const c of fire.columns) { if (c.Q <= 0) continue; const d2 = Math.max(0.0025, (x - c.x) ** 2 + (y - c.y - c.Lf / 3) ** 2 + (z - c.z) ** 2); qr += P.chiR * c.Q * 1000 / (4 * Math.PI * d2); }
+        q += A * Math.min(qr, P.qFlame * (1 - Fc));
+        if (qr > 15e3) pilot = true;   // 炎がすぐ近く（強い放射を受けている）なら、出てきたガスに火が移る
         q -= A * 0.9 * P.sigma * (K4(T) - K4(P.TA)) * (1 - 0.75 * Fc);
         // 熾火の床から（近いほど強く）
         const bb = bedBin(x, z);
@@ -112,7 +117,7 @@ export function stepFire(fire, dt, rnd = Math.random) {
       // 熱分解：ガスが出る（温度が高いほど速い）
       let mdot = 0;
       if (T > P.Tpyro && log.vol[i] > 0) {
-        const r = 0.008 * t.kp * soft((T - P.Tpyro) / (540 - P.Tpyro)) ** 1.3;
+        const r = 0.004 * t.kp * soft((T - P.Tpyro) / (540 - P.Tpyro)) ** 1.3;
         mdot = Math.min(log.vol[i] / dt, log.vol[i] * r + log.vol0 * r * 0.15);
         log.vol[i] -= mdot * dt;
         q -= mdot * P.dHpyro;
@@ -121,7 +126,7 @@ export function stepFire(fire, dt, rnd = Math.random) {
       // 着火：近くに炎があれば低い温度で、無ければ高い温度で
       const flux = A > 0 ? mdot / (A / Math.sqrt(t.areaMul)) : 0;   // 紙のしわの奥まで面積に数えると、炎が付かない計算になる
       const can = A > 0 && (T > P.Tauto || (T > P.Tpilot && (Fc > 0.15 || log.flaming[i] || pilot)) || (T > P.Tpilot && nearMatch(fire, x, y, z)));
-      log.flaming[i] = can && flux * (1 - quench * 0.95) > (log.flaming[i] ? 0.6e-3 : 1.4e-3) ? 1 : 0;
+      log.flaming[i] = can && flux * (1 - quench * 0.95) > (log.flaming[i] ? 0.3e-3 : 0.7e-3) ? 1 : 0;
       if (log.flaming[i]) {
         const burn = Math.min(1, o2);
         hrr += mdot * P.dHvol * burn; hrrF += mdot * P.dHvol * burn;

@@ -76,6 +76,17 @@ const scen = {
     report('火おこし（新聞紙→小枝→針葉樹、4分で針葉樹をもう1本）', r, f);
     console.log(r.series.join('\n'));
   },
+  // 焚き付けの横の床に、針葉樹が1本だけ寝ている（ゲームで転がり落ちたとき。2026-10-08 本人「針葉樹が燃え続かない」）
+  beside() {
+    const f = makeFire();
+    put(f, 'newspaper', 0, floor + 0.05, 0);
+    put(f, 'twig', 0, floor + 0.11, -0.02, yaw(0.3));
+    put(f, 'twig', 0, floor + 0.11, 0.03, yaw(-0.4));
+    put(f, 'pine', 0.09, floor + 0.03, 0, yaw(Math.PI / 2));
+    addMatch(f, 0, floor + 0.02, 0.05);
+    const r = run(f, 1200); report('焚き付けの横に針葉樹1本', r, f);
+    console.log(r.series.filter((_, i) => i % 2 === 0).join('\n'));
+  },
   // 熾火の上に1本ずつ（種類ごと）
   single() {
     for (const k of ['pine', 'oak', 'damp']) {
